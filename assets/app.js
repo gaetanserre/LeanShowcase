@@ -695,7 +695,6 @@
     const authors = (M.authors || []).join(", ");
     const paper = M.paper ? (M.paperUrl ? `<a href="${esc(M.paperUrl)}" target="_blank" rel="noopener">${esc(M.paper)}</a>` : esc(M.paper)) : "";
     return `<main class="page"><div class="col">
-      <div class="eyebrow">A Lean formalization</div>
       <h1 class="title">${esc(M.title || M.module)}</h1>
       ${M.subtitle ? `<p class="subtitle">${inline(M.subtitle)}</p>` : ""}
       ${authors ? `<div class="authors">${esc(authors)}</div>` : ""}
