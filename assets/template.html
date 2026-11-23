@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{TITLE}}</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=STIX+Two+Text:ital,wght@0,400;0,600;1,400&family=Inter:ital,wght@0,400;0,500;0,600;1,400&family=Fira+Code:wght@400;600&display=swap">
+<style>
+/*{{STYLE}}*/
+</style>
+<script>
+  // MathJax: only the math the page marks itself, \( \) and \[ \], is typeset.
+  window.MathJax = {
+    tex: { inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]] },
+    svg: { fontCache: "global" },
+    startup: {
+      typeset: false,
+      ready() {
+        MathJax.startup.defaultReady();
+        MathJax.startup.promise.then(() => { if (window.showcaseTypeset) window.showcaseTypeset(); });
+      },
+    },
+  };
+</script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-svg.min.js"></script>
+</head>
+<body>
+<div id="app"><noscript>This page needs JavaScript to display the formalization.</noscript></div>
+<script id="showcase-data" type="application/json">{{DATA}}</script>
+<script>
+/*{{SCRIPT}}*/
+</script>
+</body>
+</html>

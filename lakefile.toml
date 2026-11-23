@@ -1,0 +1,14 @@
+name = "showcase"
+version = "0.1.0"
+keywords = ["documentation", "website"]
+description = "A reader-facing website for a Lean formalization: trusted libraries, axioms, definitions, then the results."
+defaultTargets = ["showcase"]
+
+[[lean_lib]]
+name = "Showcase"
+
+[[lean_exe]]
+name = "showcase"
+root = "Main"
+# The pretty-printer runs the delaborators of the formalization (e.g. Mathlib's notations).
+supportInterpreter = true
