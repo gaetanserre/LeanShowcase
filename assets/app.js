@@ -776,7 +776,6 @@
           ${k.danger ? `<span class="tag danger">not standard</span>` : `<span class="tag ok">standard</span>`}</div>
         <div class="desc">${k.math ? `<div class="ax-stmt prose">${markdown(k.math)}</div><p>${inline(k.why || "")}</p>` : `<p><strong>${inline(k.plain)}</strong> ${inline(k.why || "")}</p>`}</div>
         ${k.lean ? `<pre class="code"><code>${highlight(k.lean, [])}</code></pre>` : ""}
-        <div class="chips"><span class="lbl">Used by ${users.length === shown.length ? "every result" : users.length + " of the " + shown.length + " results"}</span></div>
         <div class="links">${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">Lean documentation</a>` : ""}<a href="${TPIL}" target="_blank" rel="noopener">Axioms in Lean (Theorem Proving in Lean 4)</a>${k.wiki ? `<a href="${esc(k.wiki)}" target="_blank" rel="noopener">Wikipedia</a>` : ""}</div>
       </article>`;
     };
