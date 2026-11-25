@@ -17,13 +17,18 @@ the results rest on, in four screens.
    through their types and the bodies of definitions, and all the definitions of the files listed
    as `trusted`. No checker can tell whether they mean what they should, so they are shown in full.
 4. **Results.** The text of the paper, with a card for each result: the informal statement (the
-   docstring), the informal proof (the comments of the Lean proof), the Lean statement as Lean
-   elaborates it (every name links to its definition), and the Lean source.
+   docstring), its proof as a map of its arguments or as a short sentence (or else the comments of
+   the Lean proof), the Lean statement as Lean elaborates it (every name links to its definition),
+   and the Lean source.
 
 The reader accepts the first three screens before the results. A badge links to an explanation of
 `lake comparator` and of the checkers it runs.
 
-The output is a single `index.html`, with no server and no build step for the reader.
+The output is a static folder. It holds `index.html`, with the data and the code of the page, and the
+images and the favicon next to it. The reader needs no server and no build step.
+
+For a complete example, see [CompactSVGD](https://github.com/gaetanserre/CompactSVGD). Its website
+is generated from `showcase/showcase.md`, with proof maps, short proofs and figures.
 
 ## Setup in a project
 
@@ -65,7 +70,7 @@ lake build
 cd showcase && lake exe showcase
 ```
 
-The site is written to `showcase/_site/index.html`.
+The site is written to `showcase/_site/`.
 
 To run `lake comparator` first and show its verdict on the website:
 
@@ -85,44 +90,100 @@ A front matter between `---` lines, then the text of the paper in Markdown.
 
 ```markdown
 ---
-title: Mean-field SVGD on a compact domain
-module: CompactSVGD.Paper
-trusted: [CompactSVGD.Definitions]
-docgen: https://gaetanserre.github.io/CompactSVGD/docs/
+title: The mean value theorem
+module: MyProject.MeanValue
+trusted: [MyProject.Defs]
+docgen: https://example.org/MyProject/docs/
 ---
 
-Stein's identity is the starting point.
+A differentiable function has a tangent parallel to each of its chords.
 
-{{ProbabilityTheory.stein_identity | Lemma A.3}}
+{{exists_deriv_eq_slope | Theorem 1}}
 ```
 
 A line `{{Name}}` or `{{Name | Label}}` displays the declaration `Name` with the label `Label`
-(`Theorem 3.1`, `Definition A.5`, ...). The name is resolved in the namespaces of the file, so
-`{{weak_convergence}}` works inside `namespace SVGD`. Without any such line, the website shows every
-declaration of `module`, in the order of the file, with its module docstrings: the whole file.
+(`Theorem 3.1`, `Definition 2`, ...). It can also be a declaration of a dependency, such as
+Mathlib, shown with its source and a link to its docgen. The name is resolved in the namespaces that
+the file enters or opens, so `{{Icc_subset_Icc}}` works after `open Set`. Without any such line, the
+website shows every declaration of `module`, in the order of the file, with its module docstrings:
+the whole file.
 
 In the text and in the docstrings, a code span that mentions a known constant is shown as Lean code
-with links (`` `SVGD.direction` ``), and the others as mathematics (`` `𝔎(μ ∣ π) = ‖φ*_μ‖²` ``, where
+with links (`` `deriv` ``), and the others as mathematics (`` `‖x‖^2 = ∑_i x_i^2` ``, where
 `_x`, `_{...}`, `^x` and `^{...}` are sub- and superscripts). `[Key]` cites an entry of the
 bibliography.
 
 A block ```` ```informal Name ```` gives the mathematical version of the declaration `Name` (or of
-a notation, written as on the definitions screen, e.g. `𝓗[d, H₀]`). It replaces the docstring on
+a notation, written as on the definitions screen, e.g. `𝔼[X]`). It replaces the docstring on
 the definitions screen, and it does not appear in the text of the paper:
 
 ````markdown
-```informal SVGD.pairing
-Let $H_0$ be a real inner product space and $h \in H_0^d$. The pairing of $h$ is the map
-$$P_h : H_0 \to \mathbb{R}^d, \qquad u \mapsto (\langle h_i, u \rangle)_i.$$
+```informal deriv
+Let $f : \mathbb{R} \to \mathbb{R}$ and $x \in \mathbb{R}$. The derivative of $f$ at $x$ is
+$$f'(x) = \lim_{h \to 0} \frac{f(x + h) - f(x)}{h}$$
+if this limit exists, and $f'(x) = 0$ otherwise.
 ```
 ````
 
-A title after a bar, ```` ```informal SVGD.pairing | The pairing $P_h$ ````, replaces the title of
+A title after a bar, ```` ```informal deriv | The derivative ````, replaces the title of
 the docstring (its leading `**Title**`) on the card, in the table of contents and on the definitions
 screen. On the definitions screen, the Lean name is shown next to it.
 
 A block ```` ```proof Name ```` gives the mathematical proof of the result `Name`. It is folded
 under its statement, and the reader unfolds it.
+
+A block ```` ```sketch Name ```` gives a short proof of `Name`, in one or two sentences. It is shown
+under the statement, after *Proof idea.*
+
+A block ```` ```diagram Name ```` draws the proof of `Name` as a map: boxes for the facts it uses and
+the steps it takes, and an arrow from each fact to the step that uses it. Each box is a line
+`id: head <- dep, dep`, followed by its text on indented lines, and by an explanation on indented
+lines that start with `>`. The head says what the box is.
+
+* `` `Name` ``, a code span alone: a result of the page, labelled as on the page. The box links to
+  its card, and its explanation is its statement.
+* `step`: a step of the proof.
+* `goal`: the conclusion, labelled like the card.
+* any other text: a classical theorem, with its name, then the Lean name of its statement as a code
+  span, then a citation `[Key]`. The box names the library that proves it (Mathlib, Tau Ceti, the
+  project, ...), and its explanation links to the Lean statement.
+
+````markdown
+```diagram exists_deriv_eq_slope
+h: step
+  $h(x) = (b - a) f(x) - (f(b) - f(a)) x$
+  > $h$ is continuous on $[a, b]$, differentiable on $(a, b)$, and $h(a) = h(b) = b f(a) - a f(b)$.
+rolle: Rolle's theorem `exists_hasDerivAt_eq_zero` <- h
+  $h'(c) = 0$ for some $c \in (a, b)$
+goal <- rolle
+  $f'(c) = \frac{f(b) - f(a)}{b - a}$
+```
+````
+
+The map is laid out with [dagre](https://github.com/dagrejs/dagre), top to bottom. A map wider than
+the card is scaled down. The reader selects a box to see its explanation under the map, and hovering
+a box shows the facts it rests on.
+
+A block ```` ```figure Name ```` adds a figure to the card of `Name`, under its statement. A block
+```` ```figure ```` without a name stays in the text, where it is written. Each line `path` or
+`path | caption` is an image, and the other lines are the caption of the figure. Several images are
+set side by side, labelled a), b), ... The figures are numbered in the order of the page, and a click
+enlarges an image. An image alone is at most 1.6 times its own size. Thus, a text set at 9pt in the
+figure is about as large as the text of the page. An image can also be written `![alt](path)` in
+the text.
+
+````markdown
+```figure exists_deriv_eq_slope
+figures/chord.svg | $f(x) = x^3$
+figures/tangent.svg | $f(x) = \sin x$
+The chord between $a$ and $b$, and the tangent at $c$, parallel to it. **a)** ... **b)** ...
+```
+````
+
+The paths of the images are relative to `showcase.md`, inside its folder. Each image is copied to
+the output folder at the same path, and a missing image stops the generation before anything else.
+An image given by a URL is left to the browser. The formats are SVG, PNG, JPEG, GIF, WebP and AVIF.
+The page reads the size of an SVG or PNG image, to keep its place while it loads.
 
 A link `[Lemma 2](#Name)` goes to the card of `Name` in the results, or to its item on the
 definitions screen. It lets the mathematical texts refer to a result without naming a Lean
@@ -155,6 +216,7 @@ Only `module` is required.
 | `checkers`                       |                                                     | The checkers to show on the badge when there is no report.                                                                           |
 | `repository`, `rev`              | `git remote get-url origin`, `git rev-parse HEAD`   | For the links to the source.                                                                                                         |
 | `output`                         | `_site`                                             | The output folder.                                                                                                                   |
+| `favicon`                        | the icon of Showcase, `⊢` on a blue square          | An image, relative to `showcase.md`.                                                                                                 |
 
 Paths are relative to `showcase.md`. Values are strings, inline lists `[a, b]`, lists of `- item`
 lines, maps of indented `key: value` lines, or text blocks introduced by `>` (lines joined) or `|`
@@ -198,8 +260,9 @@ On Linux, comparator runs in its sandbox, and the website says so.
 * the imports of the challenge module of comparator, read from its source and followed through
   every kind of import, for the libraries to trust.
 
-It then fills the template of `assets/` with this data. The site uses no JavaScript library, except
-MathJax for the mathematics.
+It then fills the template of `assets/` with this data, and copies the images and the favicon next
+to the page. The page has a single, light theme. The site uses two JavaScript libraries,
+loaded from a CDN: MathJax for the mathematics, and dagre for the layout of the proof maps.
 
 ## AI Disclaimer
 

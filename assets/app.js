@@ -124,6 +124,12 @@
   const titles = D.titles || {};   // name -> title from showcase.md, over the one of the docstring
   /* The mathematical proofs of results written in `showcase.md`. */
   const proofs = D.proofs || {};
+  /* The proof maps and the short proofs of results written in `showcase.md`. */
+  const diagrams = D.diagrams || {};
+  const sketches = D.sketches || {};
+  const figures = D.figures || {};
+  // the images of the page, with their width and height when they are known
+  const media = D.media || {};
 
   /* A proof as in a paper: "Proof." at the start, a square at the end. */
   /* The mathematical proof of a result, folded: the reader unfolds it on demand. */
@@ -295,6 +301,9 @@
 
   function inlineText(p) {
       let s = esc(p);
+      // images, `![alt](path)` or `![alt](path "title")` (the quotes are escaped here)
+      s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;([^)]*?)&quot;)?\)/g, (a, alt, u, title) =>
+        `<img class="md-img" src="${u}" alt="${alt}"${title ? ` title="${title}"` : ""}${sizeAttrs(u)} loading="lazy" decoding="async">`);
       // links. `[Lemma 2](#Name)` goes to the result or the definition `Name` of the page, so that
       // the mathematical texts can refer to them without naming Lean declarations.
       s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (a, t, u) => {
@@ -346,6 +355,7 @@
         i++;
         while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
         i++;
+        if (lang === "figure") { out.push(figureHtml(buf.join("\n"))); continue; }
         out.push(`<pre class="code"><code>${lang === "lean" || lang === "" ? highlight(buf.join("\n"), null) : esc(buf.join("\n"))}</code></pre>`);
         continue;
       }
@@ -916,14 +926,17 @@
         ? `<a class="tag trust" href="#definitions" data-goto="${esc(trustId[name])}" title="See the definitions">definition to trust</a>`
         : `<span class="tag trust">definition</span>`;
     const toggles = [];
-    const written = isThm && proofs[name];
+    const written = isThm && (proofs[name] || diagrams[name] || sketches[name]);
     if (isThm && !written && ((d.steps && d.steps.length) || aux.length)) toggles.push(["proof", "Informal proof"]);
     toggles.push(["sig", "Lean statement"]);
     toggles.push(["code", isThm ? "Lean proof" : "Lean definition"]);
     return `<article class="card" id="${id}" data-name="${esc(name)}">
       <div class="card-head"><span class="label">${inline(kindLabel)}</span>${title ? `<span class="name">${inline(title)}</span>` : ""}${refHtml(ref, label)}${tag}</div>
       <div class="card-body"><div class="stmt prose">${informal[name] ? markdown(informal[name]) : markdown(docTitle ? rest : (d.doc || ""))}</div>
-        ${written ? proofHtml(proofs[name]) : ""}</div>
+        ${figures[name] ? figureHtml(figures[name]) : ""}
+        ${isThm && sketches[name] ? sketchHtml(sketches[name]) : ""}
+        ${isThm && diagrams[name] ? mapHtml(name, kindLabel) : ""}
+        ${isThm && proofs[name] ? proofHtml(proofs[name]) : ""}</div>
       <div class="card-foot">
         ${toggles.map(([k, t]) => `<button class="tog" data-panel="${k}" aria-expanded="false"><span class="chev">▶</span>${t}</button>`).join("")}
         <span class="spacer"></span>
@@ -949,7 +962,7 @@
         <pre class="code"><code>${signature(d)}</code></pre></div>`;
     }
     return `<div class="panel" data-kind="code"><h4>${d.kind === "theorem" ? "Lean proof" : "Lean definition"}</h4>
-      <p class="hint">The source, as written in <code class="lean">${esc(M.modulePath || d.module)}</code>${d.line ? `, lines ${d.line}–${d.endLine}` : ""}.</p>
+      <p class="hint">The source, as written in <code class="lean">${esc(d.module === M.module && M.modulePath ? M.modulePath : d.module)}</code>${d.line ? `, lines ${d.line}–${d.endLine}` : ""}.</p>
       <pre class="code"><code>${highlight(d.source, d.uses)}</code></pre>
       ${auxHtml(d, false)}</div>`;
   }
@@ -1045,6 +1058,322 @@
     return html.replace("__REFS__", refsUsed());
   }
 
+
+  /* ------------------------------------------------------------------ figures */
+
+  /* The width and height of an image, so that the page keeps its place while it loads. */
+  function sizeAttrs(src) {
+    const sz = media[src.replace(/&amp;/g, "&")];
+    return sz ? ` width="${sz[0]}" height="${sz[1]}"` : "";
+  }
+
+  /* A block ```figure of `showcase.md`: one image per line, `path` or `path | caption`, then the
+     caption of the figure. Several images are set side by side, as a), b), ... The figures are
+     numbered in the order of the page. */
+  const IMAGE = /^[^\s|]+\.(svg|png|jpe?g|gif|webp|avif)$/i;
+  // A figure alone on its row is at most this many times its own size (in points for an SVG file),
+  // so that a text set at 9pt in the figure is about as large as the text of the page.
+  const FIGURE_SCALE = 1.6;
+  let figureCounter = 0;
+  function figureHtml(body) {
+    const images = [];
+    const caption = [];
+    body.split("\n").forEach((l) => {
+      const parts = l.split("|");
+      const src = parts[0].trim();
+      if (IMAGE.test(src)) images.push({ src, sub: parts.slice(1).join("|").trim() });
+      else caption.push(l.trim());
+    });
+    const n = ++figureCounter;
+    const many = images.length > 1;
+    const items = images.map((im, k) => {
+      const letter = many ? String.fromCharCode(97 + k) + ")" : "";
+      const sub = letter || im.sub
+        ? `<figcaption>${letter ? `<b>${letter}</b> ` : ""}${inline(im.sub)}</figcaption>` : "";
+      const sz = media[im.src];
+      const width = !many && sz ? ` style="max-width: ${Math.round(FIGURE_SCALE * sz[0])}px"` : "";
+      return `<div class="fig-item"${width}><button class="fig-zoom" type="button" aria-label="Enlarge figure ${n}${letter ? " " + letter : ""}"><img src="${esc(im.src)}" alt="Figure ${n}${letter ? " " + letter : ""}"${sizeAttrs(im.src)} loading="lazy" decoding="async"></button>${sub}</div>`;
+    }).join("");
+    const text = caption.join(" ").trim();
+    return `<figure class="fig" id="figure-${n}"><div class="fig-row">${items}</div>
+      <figcaption class="fig-cap"><b>Figure ${n}.</b>${text ? " " + inline(text) : ""}</figcaption></figure>`;
+  }
+
+  /* An image enlarged over the page. A click or the Escape key closes it. */
+  function openLightbox(img) {
+    const box = document.createElement("div");
+    box.className = "lightbox";
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-modal", "true");
+    box.setAttribute("aria-label", img.alt);
+    box.tabIndex = -1;
+    box.innerHTML = `<img src="${img.getAttribute("src")}" alt="${esc(img.alt)}"><button class="lightbox-close" type="button" aria-label="Close">×</button>`;
+    const back = document.activeElement;
+    const close = () => {
+      box.remove();
+      document.removeEventListener("keydown", onKey);
+      if (back && back.focus) back.focus();
+    };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    box.addEventListener("click", close);
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(box);
+    box.focus();
+  }
+
+  /* ------------------------------------------------------------------ proof maps */
+
+  /* A short proof, as one paragraph under the statement. */
+  function sketchHtml(md) {
+    return `<div class="sketch prose"><p><em class="proof-label">Proof idea.</em> ${inline(md.replace(/\s*\n\s*/g, " ").trim())}</p></div>`;
+  }
+
+  /* A block ```diagram Name of `showcase.md`: one node per line `id: head <- dep, dep`, followed by
+     its text on indented lines, and by its explanation on indented lines that start with `>`.
+     The head is `step`, `goal`, a result of the page written as a code span, or the name of a
+     classical theorem, followed by its Lean name as a code span and by a citation `[Key]`. */
+  const mapCache = {};
+  function parseMap(name) {
+    if (mapCache[name]) return mapCache[name];
+    const nodes = [], byId = {}, errors = [];
+    let cur = null;
+    diagrams[name].replace(/\r/g, "").split("\n").forEach((line) => {
+      if (!line.trim()) return;
+      if (/^\s/.test(line)) {
+        if (!cur) return;
+        const t = line.trim();
+        if (t.startsWith(">")) cur.detail.push(t.replace(/^>\s?/, ""));
+        else cur.text.push(t);
+        return;
+      }
+      let left = line.trim(), deps = [];
+      const arrow = left.lastIndexOf("<-");
+      if (arrow >= 0) {
+        deps = left.slice(arrow + 2).split(",").map((x) => x.trim()).filter(Boolean);
+        left = left.slice(0, arrow).trim();
+      }
+      const colon = left.indexOf(":");
+      const id = (colon >= 0 ? left.slice(0, colon) : left).trim();
+      const head = (colon >= 0 ? left.slice(colon + 1) : left).trim();
+      const n = { id, deps, text: [], detail: [] };
+      let m;
+      if (head === "goal") n.kind = "goal";
+      else if (head === "step" || head === "") n.kind = "step";
+      else if ((m = /^`([^`]+)`$/.exec(head))) {
+        n.kind = "result";
+        n.name = refs[m[1]] || m[1];
+      } else {
+        n.kind = "classical";
+        const c = /`([^`]+)`/.exec(head);
+        if (c) n.name = refs[c[1]] || c[1];
+        const k = /\[([^\]]+)\]/.exec(head);
+        if (k) n.cite = k[1];
+        n.title = head.replace(/`[^`]*`/g, "").replace(/\[[^\]]*\]/g, "").trim();
+      }
+      if (byId[id]) errors.push(`duplicate node ${id}`);
+      byId[id] = n;
+      nodes.push(n);
+      cur = n;
+    });
+    const edges = [];
+    nodes.forEach((n) => n.deps.forEach((d) => {
+      if (byId[d]) edges.push([d, n.id]);
+      else errors.push(`unknown node ${d} in ${n.id}`);
+    }));
+    return (mapCache[name] = { nodes, byId, edges, errors });
+  }
+
+  /* The library of a constant: the root of its module, `Mathlib`, `TauCeti`, the project, ... */
+  function libraryOf(name) {
+    const mod = (D.constModules || {})[name] || (decls[name] && decls[name].module);
+    if (!mod) return null;
+    const root = mod.split(".")[0];
+    return { TauCeti: "Tau Ceti", Init: "Lean", Std: "Lean", Lean: "Lean" }[root] || root;
+  }
+
+  function nodeLabel(n, goalLabel) {
+    if (n.kind === "goal") return goalLabel;
+    if (n.kind === "result") return labelOf[n.name] || (decls[n.name] ? lastPart(shortName(n.name)) : lastPart(n.name));
+    if (n.kind === "classical") return n.title;
+    return "";
+  }
+
+  function mapHtml(name, goalLabel) {
+    const g = parseMap(name);
+    const nodes = g.nodes.map((n) => {
+      const label = nodeLabel(n, goalLabel);
+      const lib = n.kind === "classical" && n.name ? libraryOf(n.name) : null;
+      const text = n.text.length ? n.text.join(" ")
+        : n.kind === "result" && decls[n.name] ? (titles[n.name] || splitDoc(decls[n.name].doc).title || "") : "";
+      const more = n.detail.length || n.kind === "result" || (n.kind === "classical" && (n.name || n.cite));
+      return `<div class="pn ${n.kind}${more ? " more" : ""}" data-id="${esc(n.id)}" tabindex="0" role="button" aria-label="${esc(label || "Step")}">
+        ${label ? `<div class="pn-label">${inline(label)}${lib ? `<span class="pn-lib">${esc(lib)}</span>` : ""}</div>` : ""}
+        ${text ? `<div class="pn-text">${inline(text)}</div>` : ""}</div>`;
+    }).join("");
+    return `<figure class="pmap" data-name="${esc(name)}">
+      <figcaption><em class="proof-label">Proof map.</em> <span class="hint">Each arrow goes from a fact to the step that uses it. Select a box for details.</span></figcaption>
+      ${g.errors.length ? `<p class="pmap-error">${esc(g.errors.join("; "))}</p>` : ""}
+      <div class="pmap-scroll"><div class="pmap-sizer"><div class="pmap-canvas"><svg class="pmap-edges" aria-hidden="true"></svg>${nodes}</div></div></div>
+      <div class="pmap-detail" hidden></div>
+    </figure>`;
+  }
+
+  /* A smooth path through the points of an edge (the B-spline of d3's curveBasis). */
+  function basisPath(pts) {
+    if (pts.length < 3) return "M" + pts.map((p) => `${p.x},${p.y}`).join("L");
+    let d = `M${pts[0].x},${pts[0].y}`;
+    let [x0, y0, x1, y1] = [pts[0].x, pts[0].y, pts[0].x, pts[0].y];
+    const bez = (x, y) => {
+      d += `C${(2 * x0 + x1) / 3},${(2 * y0 + y1) / 3},${(x0 + 2 * x1) / 3},${(y0 + 2 * y1) / 3},${(x0 + 4 * x1 + x) / 6},${(y0 + 4 * y1 + y) / 6}`;
+    };
+    pts.forEach((p, i) => {
+      if (i === 0) return;
+      if (i === 1) { x0 = x1; y0 = y1; x1 = p.x; y1 = p.y; return; }
+      if (i === 2) d += `L${(5 * x0 + x1) / 6},${(5 * y0 + y1) / 6}`;
+      bez(p.x, p.y);
+      x0 = x1; y0 = y1; x1 = p.x; y1 = p.y;
+    });
+    bez(x1, y1);
+    d += `L${x1},${y1}`;
+    return d;
+  }
+
+  /* Layers by longest path from the sources, when dagre is not available. */
+  function fallbackLayout(g, size) {
+    const rank = {};
+    const visit = (id, seen) => {
+      if (id in rank) return rank[id];
+      if (seen.has(id)) return 0;
+      seen.add(id);
+      const n = g.byId[id];
+      rank[id] = n.deps.filter((x) => g.byId[x]).reduce((r, x) => Math.max(r, visit(x, seen) + 1), 0);
+      return rank[id];
+    };
+    g.nodes.forEach((n) => visit(n.id, new Set()));
+    const rows = [];
+    g.nodes.forEach((n) => (rows[rank[n.id]] = rows[rank[n.id]] || []).push(n.id));
+    const gap = 24, rgap = 40;
+    const widths = rows.map((r) => r.reduce((w, id) => w + size[id].w, 0) + gap * (r.length - 1));
+    const W = Math.max(...widths);
+    const pos = {};
+    let y = 0;
+    rows.forEach((r, i) => {
+      const h = Math.max(...r.map((id) => size[id].h));
+      let x = (W - widths[i]) / 2;
+      r.forEach((id) => { pos[id] = { x: x + size[id].w / 2, y: y + h / 2 }; x += size[id].w + gap; });
+      y += h + rgap;
+    });
+    const edges = g.edges.map(([a, b]) => [a, b, [
+      { x: pos[a].x, y: pos[a].y + size[a].h / 2 }, { x: pos[b].x, y: pos[b].y - size[b].h / 2 }]]);
+    return { pos, edges, W, H: y - rgap };
+  }
+
+  /* Places the boxes of the maps of `root` and draws their arrows. The boxes are measured first, so
+     the layout follows the size of the formulas. */
+  function layoutMaps(root) {
+    root.querySelectorAll(".pmap").forEach((fig) => {
+      const g = parseMap(fig.getAttribute("data-name"));
+      const canvas = fig.querySelector(".pmap-canvas");
+      const els = {};
+      canvas.querySelectorAll(".pn").forEach((el) => { els[el.getAttribute("data-id")] = el; });
+      // a box is as wide as its text, up to the maximal width of the CSS, unless a formula that
+      // cannot be broken is wider
+      g.nodes.forEach((n) => { els[n.id].style.width = ""; els[n.id].style.maxWidth = ""; });
+      g.nodes.forEach((n) => {
+        const el = els[n.id];
+        if (el.scrollWidth > el.clientWidth + 1) {
+          const cs = getComputedStyle(el);
+          el.style.maxWidth = "none";
+          el.style.width = `${Math.ceil(el.scrollWidth + parseFloat(cs.paddingRight) + 2)}px`;
+        }
+      });
+      const size = {};
+      g.nodes.forEach((n) => { size[n.id] = { w: els[n.id].offsetWidth, h: els[n.id].offsetHeight }; });
+      if (g.nodes.some((n) => !size[n.id].w)) return;   // not displayed yet
+      let L;
+      if (window.dagre) {
+        const G = new dagre.graphlib.Graph();
+        G.setGraph({ rankdir: "TB", nodesep: 22, ranksep: 34, edgesep: 12, marginx: 2, marginy: 2 });
+        G.setDefaultEdgeLabel(() => ({}));
+        g.nodes.forEach((n) => G.setNode(n.id, { width: size[n.id].w, height: size[n.id].h }));
+        g.edges.forEach(([a, b]) => G.setEdge(a, b));
+        dagre.layout(G);
+        const pos = {};
+        g.nodes.forEach((n) => { const v = G.node(n.id); pos[n.id] = { x: v.x, y: v.y }; });
+        L = { pos, edges: g.edges.map(([a, b]) => [a, b, G.edge(a, b).points]),
+          W: G.graph().width, H: G.graph().height };
+      } else L = fallbackLayout(g, size);
+      g.nodes.forEach((n) => {
+        els[n.id].style.left = `${L.pos[n.id].x - size[n.id].w / 2}px`;
+        els[n.id].style.top = `${L.pos[n.id].y - size[n.id].h / 2}px`;
+      });
+      canvas.style.width = `${Math.ceil(L.W)}px`;
+      canvas.style.height = `${Math.ceil(L.H)}px`;
+      // a map wider than the card is scaled down, to at most 75 %, then scrolls. The sizer takes
+      // the scaled size, so that the scroll box only sees it.
+      const avail = fig.querySelector(".pmap-scroll").clientWidth - 4;
+      const f = L.W > avail ? Math.max(0.75, avail / L.W) : 1;
+      canvas.style.transform = f < 1 ? `scale(${f})` : "";
+      const sizer = fig.querySelector(".pmap-sizer");
+      sizer.style.width = `${Math.ceil(L.W * f)}px`;
+      sizer.style.height = `${Math.ceil(L.H * f)}px`;
+      const svg = canvas.querySelector(".pmap-edges");
+      svg.setAttribute("viewBox", `0 0 ${Math.ceil(L.W)} ${Math.ceil(L.H)}`);
+      svg.setAttribute("width", Math.ceil(L.W));
+      svg.setAttribute("height", Math.ceil(L.H));
+      svg.innerHTML = `<defs><marker id="pm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="context-stroke" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>` +
+        L.edges.map(([a, b, pts]) => `<path class="pe" data-from="${esc(a)}" data-to="${esc(b)}" d="${basisPath(pts)}" marker-end="url(#pm-arrow)"/>`).join("");
+      fig.classList.add("laid");
+    });
+  }
+
+  /* Hovering a box shows what it rests on: its incoming arrows and their sources. */
+  function highlightNode(pn, fig) {
+    fig = fig || pn.closest(".pmap");
+    fig.querySelectorAll(".hl, .src").forEach((el) => el.classList.remove("hl", "src"));
+    fig.classList.toggle("focus", !!pn);
+    if (!pn) return;
+    const id = pn.getAttribute("data-id");
+    pn.classList.add("hl");
+    fig.querySelectorAll(".pe").forEach((e) => {
+      if (e.getAttribute("data-to") !== id) return;
+      e.classList.add("hl");
+      const s = fig.querySelector(`.pn[data-id="${CSS.escape(e.getAttribute("data-from"))}"]`);
+      if (s) s.classList.add("src");
+    });
+  }
+
+  /* Selecting a box shows its details under the map: the statement of a result, the Lean version
+     of a classical theorem, the explanation of a step. */
+  function selectNode(pn, fig) {
+    fig = fig || pn.closest(".pmap");
+    const box = fig.querySelector(".pmap-detail");
+    const prev = fig.querySelector(".pn.sel");
+    if (prev) prev.classList.remove("sel");
+    if (!pn || prev === pn) { box.hidden = true; box.innerHTML = ""; return; }
+    const g = parseMap(fig.getAttribute("data-name"));
+    const n = g.byId[pn.getAttribute("data-id")];
+    const card = fig.closest(".card");
+    const goalLabel = card ? card.querySelector(".card-head .label").textContent : "";
+    const label = nodeLabel(n, goalLabel);
+    let body = n.detail.length ? markdown(n.detail.join("\n")) : "";
+    if (n.kind === "result" && decls[n.name]) {
+      const d = decls[n.name];
+      const t = titles[n.name] || splitDoc(d.doc).title;
+      body = `<p class="pd-head"><strong>${inline(label)}</strong>${t ? ` · <em>${inline(t)}</em>` : ""}</p>` +
+        (informal[n.name] ? markdown(informal[n.name]) : markdown(t ? splitDoc(d.doc).rest : (d.doc || ""))) + body +
+        (n.name in resultId ? `<p class="pd-link"><a href="#results" data-goto="${resultId[n.name]}">Go to ${inline(label)} →</a></p>` : "");
+    } else if (n.kind === "classical") {
+      const lib = n.name ? libraryOf(n.name) : null;
+      body = `<p class="pd-head"><strong>${inline(label)}</strong>${n.cite && bib[n.cite] ? " " + cite(n.cite) : ""}</p>` + body +
+        (n.name ? `<p class="pd-link">In Lean${lib ? `, from ${esc(lib)}` : ""}: <code class="lean">${constLink(n.name, n.name)}</code></p>` : "");
+    } else if (!body) { box.hidden = true; box.innerHTML = ""; return; }
+    pn.classList.add("sel");
+    box.innerHTML = `<button class="pmap-close" aria-label="Close">×</button>${body}`;
+    box.hidden = false;
+    typeset(box);
+  }
+
   /* --- comparator --- */
 
   function pageComparator() {
@@ -1110,7 +1439,9 @@
   /* Renders the TeX of `el` with MathJax, once it has loaded (see the template). */
   function typeset(el) {
     const mj = window.MathJax;
-    if (mj && typeof mj.typesetPromise === "function") mj.typesetPromise([el]).then(spyToc).catch(() => {});
+    if (mj && typeof mj.typesetPromise === "function") {
+      mj.typesetPromise([el]).then(() => { layoutMaps(el); spyToc(); }).catch(() => {});
+    }
   }
 
   /* Opens, in the table of contents of the results, the menu of the section being read, and closes
@@ -1154,6 +1485,13 @@
   };
   window.addEventListener("scroll", queueSpy, { passive: true });
   window.addEventListener("resize", queueSpy);
+  let mapsQueued = false;
+  window.addEventListener("resize", () => {
+    if (!mapsQueued) {
+      mapsQueued = true;
+      requestAnimationFrame(() => { mapsQueued = false; layoutMaps(app); });
+    }
+  });
   window.showcaseTypeset = () => typeset(app);
 
   /* ------------------------------------------------------------------ router */
@@ -1167,7 +1505,10 @@
   function render(route, goto) {
     if (!ROUTES[route]) route = "intro";
     if (route !== current) {
+      figureCounter = 0;
       app.innerHTML = bar(route) + ROUTES[route]();
+      // the maps are laid out at once, then again when MathJax has set their formulas
+      layoutMaps(app);
       typeset(app);
       current = route;
       document.title = (M.title || M.module) + (route === "intro" ? "" : " · " + route[0].toUpperCase() + route.slice(1));
@@ -1203,6 +1544,12 @@
       else { pendingGoto = goto; location.hash = route; }
       return;
     }
+    const zoom = e.target.closest(".fig-zoom");
+    if (zoom) { openLightbox(zoom.querySelector("img")); return; }
+    const pn = e.target.closest(".pn");
+    if (pn) { selectNode(pn); return; }
+    const close = e.target.closest(".pmap-close");
+    if (close) { selectNode(null, close.closest(".pmap")); return; }
     const acc = e.target.closest("[data-accept]");
     if (acc) {
       accept(acc.getAttribute("data-accept"));
@@ -1233,6 +1580,20 @@
       cardEl.classList.toggle("open", panels.children.length > 0);
     }
   });
+
+  app.addEventListener("keydown", (e) => {
+    const pn = e.target.closest && e.target.closest(".pn");
+    if (pn && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); selectNode(pn); }
+  });
+  ["mouseover", "focusin"].forEach((t) => app.addEventListener(t, (e) => {
+    const pn = e.target.closest && e.target.closest(".pn");
+    if (pn) highlightNode(pn);
+  }));
+  ["mouseout", "focusout"].forEach((t) => app.addEventListener(t, (e) => {
+    const pn = e.target.closest && e.target.closest(".pn");
+    if (pn && !pn.contains(e.relatedTarget)) highlightNode(null, pn.closest(".pmap"));
+  }));
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => layoutMaps(app));
 
   render(routeFromHash());
 })();

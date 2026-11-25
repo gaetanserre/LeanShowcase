@@ -14,7 +14,10 @@
   --trust: #9a5a06;
   --trust-soft: #f8eedd;
   --danger: #b3261e;
-  /* code: Catppuccin Latte, the theme of the CodeLatex lexer (Mocha in dark mode) */
+  /* the classical theorems of the proof maps */
+  --lit: #7a4fb0;
+  --lit-soft: #f1ebf9;
+  /* code: Catppuccin Latte, the theme of the CodeLatex lexer */
   --code-fg: #4c4f69;
   --code-kw: #8839ef;
   --code-br: #d20f39;
@@ -30,24 +33,8 @@
     "Segoe UI", sans-serif;
   --mono: "FiraCode Nerd Font", "Fira Code", "JuliaMono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
   --measure: 46rem;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --paper: #0f1318; --panel: #161c24; --sunk: #1d2430; --ink: #e5e9ef; --muted: #9ba6b6;
-    --rule: #2a323e; --accent: #7fa8dd; --accent-soft: #1a2940; --ok: #5cc98a; --ok-soft: #15301f;
-    --trust: #e3a64f; --trust-soft: #33270f; --danger: #ff8a80; --code-fg: #cdd6f4;
-    --code-kw: #cba6f7; --code-br: #f38ba8; --code-fn: #89b4fa; --code-com: #9399b2;
-    --code-str: #a6e3a1; --code-num: #fab387; --code-esc: #f5c2e7;
-    color-scheme: dark;
-  }
-}
-:root[data-theme="dark"] {
-  --paper: #0f1318; --panel: #161c24; --sunk: #1d2430; --ink: #e5e9ef; --muted: #9ba6b6;
-  --rule: #2a323e; --accent: #7fa8dd; --accent-soft: #1a2940; --ok: #5cc98a; --ok-soft: #15301f;
-  --trust: #e3a64f; --trust-soft: #33270f; --danger: #ff8a80; --code-fg: #cdd6f4;
-  --code-kw: #cba6f7; --code-br: #f38ba8; --code-fn: #89b4fa; --code-com: #9399b2;
-  --code-str: #a6e3a1; --code-num: #fab387; --code-esc: #f5c2e7;
-  color-scheme: dark;
+  /* the page has a single, light theme */
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -393,3 +380,71 @@ footer.foot > * { white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Figures: the images take the width of the column, side by side when there are several */
+.fig { margin: 1.2rem 0; }
+.card .fig { margin: .9rem 0 0; }
+.fig-row { display: flex; gap: 1rem; align-items: flex-start; justify-content: center; }
+.fig-item { flex: 1 1 0; min-width: 0; margin: 0; }
+.fig-item figcaption { margin-top: .3rem; text-align: center; font-size: .88rem; color: var(--muted); }
+.fig-zoom { display: block; width: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.fig-zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.fig-zoom img, .md-img { display: block; width: 100%; height: auto; }
+.fig-cap { margin-top: .6rem; font-size: .9rem; line-height: 1.5; color: var(--muted); text-align: justify;
+  hyphens: auto; -webkit-hyphens: auto; }
+.fig-cap b { color: var(--ink); font-weight: 600; }
+.lightbox { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center;
+  justify-content: center; padding: 2.5rem; background: var(--paper); cursor: zoom-out; }
+.lightbox img { width: 100%; height: 100%; object-fit: contain; }
+.lightbox-close { position: absolute; top: .6rem; right: .9rem; border: 0; background: none;
+  font-size: 1.8rem; line-height: 1; color: var(--muted); cursor: pointer; }
+@media (max-width: 40rem) { .fig-row { flex-direction: column; } }
+
+/* Short proofs and proof maps, under the statement of a result. */
+.card-body .sketch { margin-top: .5rem; }
+.card-body .sketch p { margin: .45rem 0; }
+.pmap { margin: .9rem 0 0; padding-top: .75rem; border-top: 1px dashed var(--rule); }
+.pmap figcaption { margin-bottom: .7rem; }
+.pmap figcaption .hint { font-family: var(--sans); font-size: .8125rem; color: var(--muted); }
+.pmap-scroll { overflow-x: auto; padding: 3px 2px 5px; }
+.pmap-sizer { margin: 0 auto; overflow: hidden; }
+.pmap-canvas { position: relative; transform-origin: top left; }
+.pmap:not(.laid) .pmap-canvas { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: center; }
+.pmap-edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.pn {
+  position: absolute; width: max-content; max-width: 12.5rem; padding: .35rem .65rem .45rem;
+  border: 1px solid var(--rule); border-radius: 8px; background: var(--panel); font-size: .875rem;
+  line-height: 1.4; text-align: center; transition: opacity .15s, box-shadow .15s;
+}
+.pmap:not(.laid) .pn { position: relative; }
+.pn.more { cursor: pointer; }
+.pn-label { font-family: var(--sans); font-size: .75rem; font-weight: 600; color: var(--muted); }
+.pn-lib {
+  margin-left: .4rem; padding: 0 .3rem; border-radius: 4px; font-weight: 500; font-size: .6875rem;
+  border: 1px solid currentColor; opacity: .85;
+}
+.pn-label + .pn-text { margin-top: .1rem; }
+.pn.result { border-color: var(--accent); background: var(--accent-soft); }
+.pn.result .pn-label { color: var(--accent); }
+.pn.classical { border-color: var(--lit); background: var(--lit-soft); }
+.pn.classical .pn-label { color: var(--lit); }
+.pn.goal { border: 1.5px solid var(--ok); background: var(--ok-soft); }
+.pn.goal .pn-label { color: var(--ok); }
+.pe { fill: none; stroke: var(--muted); stroke-width: 1.2; opacity: .7; transition: opacity .15s; }
+.pmap.focus .pn:not(.hl):not(.src) { opacity: .4; }
+.pmap.focus .pe:not(.hl) { opacity: .15; }
+.pe.hl { stroke: var(--accent); stroke-width: 1.7; opacity: 1; }
+.pn.sel { box-shadow: 0 0 0 2px var(--accent); }
+.pn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pmap-detail {
+  position: relative; margin-top: .75rem; padding: .5rem 2.2rem .5rem .9rem; border-radius: 8px;
+  background: var(--panel); font-size: .9375rem;
+}
+.pmap-detail p { margin: .4rem 0; }
+.pmap-detail .pd-link { font-family: var(--sans); font-size: .8125rem; }
+.pmap-close {
+  position: absolute; top: .25rem; right: .45rem; border: 0; background: none; color: var(--muted);
+  font-size: 1.15rem; line-height: 1; cursor: pointer;
+}
+.pmap-close:hover { color: var(--accent); }
+.pmap-error { color: var(--danger); font-family: var(--sans); font-size: .8125rem; }

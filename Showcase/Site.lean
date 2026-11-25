@@ -11,22 +11,22 @@ import Showcase.Extract
 # Generation of the website
 
 `Showcase.generate` reads `showcase.md`, imports the formalization, extracts its data
-(`Showcase/Extract.lean`) and writes a single self-contained `index.html`: the template of
-`assets/` with the data embedded as JSON.
+(`Showcase/Extract.lean`) and writes `index.html`, the template of `assets/` with the data embedded
+as JSON, with the images that `showcase.md` shows and the favicon next to it.
 
 ## The `showcase.md` file
 
 ```markdown
 ---
-title: Mean-field SVGD on a compact domain
-module: CompactSVGD.Paper           # the file presented
-trusted: [CompactSVGD.Definitions]  # files whose definitions the reader must check
+title: The mean value theorem
+module: MyProject.MeanValue         # the file presented
+trusted: [MyProject.Defs]           # files whose definitions the reader must check
 docgen: https://example.org/docs/   # the docgen of the project, for links
 ---
 
 Prose in Markdown, then a result:
 
-{{SVGD.weak_convergence | Theorem 3.1}}
+{{exists_deriv_eq_slope | Theorem 1}}
 ```
 
 Only `module` is required. Without any `{{...}}` line, every declaration of `module` is shown, in
@@ -132,7 +132,9 @@ def importClosure? (env : Environment) (mod : Name) : IO (Option NameSet) := do
 
 /-- Options of the command line. -/
 structure Options where
+  /-- The file `showcase.md` that describes the website. -/
   doc : System.FilePath := "showcase.md"
+  /-- The output folder, instead of the key `output` of the front matter. -/
   out : Option System.FilePath := none
   /-- Run `lake comparator --json` in the project before generating the website. -/
   comparator : Bool := false
@@ -167,12 +169,81 @@ def runComparator (opts : Options) (root report : System.FilePath) : IO Unit := 
     throw <| IO.userError s!"lake comparator failed (exit code {out.exitCode}) \
       without a JSON report:\n{out.stdout}"
 
+/-- Copies the file `src` to `dst`, creating the folders of `dst`. -/
+def copyFile (src dst : System.FilePath) : IO Unit := do
+  if let some d := dst.parent then IO.FS.createDirAll d
+  IO.FS.writeBinFile dst (← IO.FS.readBinFile src)
+
+/-- The file of the path `p` of the file `docPath` (`showcase.md`). The path must be relative, stay
+in the folder of `docPath` and name an existing file. -/
+def localSource (docPath : System.FilePath) (p : String) : IO System.FilePath := do
+  if hasPrefix p "/" || containsSub p "://" || (p.splitOn "/").contains ".." then
+    throw <| IO.userError s!"{docPath}: `{p}` must be a path relative to the folder of this \
+      file, inside it"
+  let src := docPath.parent.getD "." / p
+  unless ← src.pathExists do
+    throw <| IO.userError s!"{docPath}: cannot find the file `{p}`"
+  return src
+
+/-- The width and height of an image, from the `viewBox` of an SVG file or the header of a PNG
+file, or `none` for another format. The page reserves the space of an image before loading it. -/
+def imageSize? (p : System.FilePath) : IO (Option (Nat × Nat)) := do
+  match p.extension.map String.toLower with
+  | some "png" =>
+    let b ← IO.FS.readBinFile p
+    -- the chunk `IHDR`, then the width and the height, on four bytes each
+    if b.size < 24 || (b.extract 12 16).data != "IHDR".toUTF8.data then return none
+    let word (i : Nat) : Nat :=
+      (((b[i]!.toNat * 256 + b[i + 1]!.toNat) * 256 + b[i + 2]!.toNat) * 256) + b[i + 3]!.toNat
+    return some (word 16, word 20)
+  | some "svg" =>
+    let cs := (← IO.FS.readFile p).toList.toArray
+    let pat := "viewBox=\"".toList
+    let some a := findSub cs pat | return none
+    let some b := findSub cs ['"'] (a + pat.length) | return none
+    let nums := ((replaceAll (slice cs (a + pat.length) b) "," " ").splitOn " ").filter (· ≠ "")
+    -- the integer parts are enough for the ratio of the sides
+    let int (x : String) : Option Nat := ((x.splitOn ".").headD x).toNat?
+    match nums with
+    | [_, _, w, h] => return ((·, ·) <$> int w <*> int h).filter fun (w, h) => 0 < w && 0 < h
+    | _ => return none
+  | _ => return none
+
+/-- Copies the images `images`, pairs of their path in `showcase.md` and their file, to `outDir` at
+the same paths. Returns their sizes, for the page. -/
+def copyImages (images : Array (String × System.FilePath)) (outDir : System.FilePath) :
+    IO (Array (String × Json)) :=
+  images.mapM fun (p, src) => do
+    copyFile src (outDir / p)
+    let size ← imageSize? src
+    return (p, match size with
+      | some (w, h) => toJson #[w, h]
+      | none => Json.null)
+
+/-- Copies the favicon to `outDir` and returns its elements `<link>`: the image of the key
+`favicon` of the front matter, or else the icon of Showcase, from `assets`. -/
+def installFavicon (fm : FrontMatter) (docPath assets outDir : System.FilePath) : IO String := do
+  let links : Array (Array (String × String)) ← match fm.str? "favicon" with
+    | some p => do
+      copyFile (← localSource docPath p) (outDir / p)
+      pure #[#[("rel", "icon"), ("href", p)]]
+    | none => do
+      for f in ["favicon.svg", "favicon.png", "apple-touch-icon.png"] do
+        copyFile (assets / f) (outDir / f)
+      pure #[#[("rel", "icon"), ("href", "favicon.png"), ("sizes", "32x32")],
+        #[("rel", "icon"), ("href", "favicon.svg"), ("type", "image/svg+xml")],
+        #[("rel", "apple-touch-icon"), ("href", "apple-touch-icon.png")]]
+  return "\n".intercalate (links.map fun a => (Html.element "link" a .empty).render).toList
+
 /-- Generates the website described by the file `opts.doc`. -/
 def generate (opts : Options) : IO Unit := do
   let docPath ← IO.FS.realPath opts.doc
   let baseDir := docPath.parent.getD "."
   let doc := parseDoc (← IO.FS.readFile docPath)
   let fm := doc.fm
+  -- The images and the favicon, checked before the long steps.
+  let images ← doc.imagePaths.mapM fun p => return (p, ← localSource docPath p)
+  if let some p := fm.str? "favicon" then discard <| localSource docPath p
   let some mainStr := fm.str? "module"
     | throw <| IO.userError s!"{docPath}: the front matter has no `module` key"
   let mainModule := mainStr.toName
@@ -220,6 +291,13 @@ def generate (opts : Options) : IO Unit := do
     opens := opens ++ o
     scopedNs := scopedNs ++ s ++ o ++ fileNamespaces ls
   let namespaces := (opens ++ scopedNs).toList.eraseDups.toArray
+  -- The sources of the displayed declarations of other packages (Mathlib, ...), for their proofs.
+  for b in doc.blocks do
+    if let .decl s _ := b then
+      if let some m := (resolveIdent env namespaces s).bind (moduleOf? env) then
+        if !sources.contains m then
+          if let some p ← findSource m then
+            sources := sources.insert m (splitLines (← IO.FS.readFile p))
   let inp : Input := { origins, sources, opens := opens.toList.eraseDups.toArray, mainModule }
   -- Comparator.
   let comparatorPath := match fm.str? "comparator" with
@@ -250,8 +328,11 @@ def generate (opts : Options) : IO Unit := do
   for m in sources.keys do
     if let some p ← findSource m then
       let p := (← IO.FS.realPath p).toString
-      sourcePaths := sourcePaths.insert m (if hasPrefix p rootStr then dropN p rootStr.length else p)
+      let rel := if hasPrefix p rootStr then dropN p rootStr.length else p
+      sourcePaths := sourcePaths.insert m rel
+  -- the links to the source, for the declarations of the project only
   let sourceUrl (d : DeclData) : Option String := do
+    guard (origins.get? d.module == some "")
     let repo ← repository
     let r ← rev
     let path ← sourcePaths.get? d.module
@@ -381,8 +462,8 @@ def generate (opts : Options) : IO Unit := do
       if let .md t := b then texts := texts.push t
     for (_, d) in decls.toList do
       if let some t := d.doc then texts := texts.push t
-    -- the mathematical statements and proofs of `showcase.md` cite Lean names too
-    texts := texts ++ doc.informal.map (·.2) ++ doc.proofs.map (·.2)
+    -- the named blocks of `showcase.md` cite Lean names too
+    texts := texts ++ doc.named.map (·.2.2)
     if let some mds := getModuleDoc? env mainModule then
       texts := texts ++ mds.map (·.doc)
     let mut refs : Std.HashMap String Name := {}
@@ -399,26 +480,32 @@ def generate (opts : Options) : IO Unit := do
     for (_, n) in refs.toList do targets := targets.insert n
     for (n, _) in decls.toList do targets := targets.insert n
     let mut constsJson : Array (String × Json) := #[]
+    -- the module of each linked constant, so that the page can name its library
+    let mut constModulesJson : Array (String × Json) := #[]
     for c in targets.toArray do
       if isGenerated env c && !decls.contains c then continue
       let url := docUrl c
       if url.isNone && !decls.contains c then continue
-      constsJson := constsJson.push ((c.toString (escape := false)), optJson url)
+      let key := c.toString (escape := false)
+      constsJson := constsJson.push (key, optJson url)
+      constModulesJson := constModulesJson.push (key, match moduleOf? env c with
+        | some m => nameJson m
+        | none => Json.null)
     let declsJson := decls.toList.toArray.map fun (n, d) =>
       ((n.toString (escape := false)), d.json (sourceUrl d) (checkedNames.contains n))
-    -- The mathematical versions of declarations, by full name (or as written, e.g. a notation).
+    -- The named blocks, by full name (or as written, e.g. a notation).
     let byName (entries : Array (String × String)) : Array (String × Json) :=
       entries.map fun (n, t) =>
         ((match resolveIdent env namespaces n with
           | some c => c.toString (escape := false)
           | none => n), toJson t)
-    let informalJson := byName doc.informal
-    let proofsJson := byName doc.proofs
+    let namedJson := namedKinds.toList.map fun (kind, key) =>
+      (key, Json.mkObj (byName (doc.ofKind kind)).toList)
     let titlesJson := byName doc.titles
     -- Module docs of the main module: the title and the abstract.
     let headerDoc := ((getModuleDoc? env mainModule).bind (·[0]?)).map (·.doc)
     let (docTitle, docLead) := (headerDoc.map titleAndLead).getD (none, none)
-    return Json.mkObj [
+    return Json.mkObj <| namedJson ++ [
       ("blocks", Json.arr blockJson),
       ("shown", Json.arr (shown.map nameJson)),
       ("aux", Json.arr (auxNames.map nameJson)),
@@ -427,8 +514,7 @@ def generate (opts : Options) : IO Unit := do
       ("axioms", Json.arr axiomsJson),
       ("refs", Json.mkObj (refs.toList.map fun (s, n) => (s, nameJson n))),
       ("consts", Json.mkObj constsJson.toList),
-      ("informal", Json.mkObj informalJson.toList),
-      ("proofs", Json.mkObj proofsJson.toList),
+      ("constModules", Json.mkObj constModulesJson.toList),
       ("titles", Json.mkObj titlesJson.toList),
       ("docTitle", optJson docTitle), ("docLead", optJson docLead)]
   let (data, _) ← (action.run' {} {}).toIO ctx cst
@@ -522,10 +608,6 @@ def generate (opts : Options) : IO Unit := do
     ("report", report.getD Json.null),
     ("reportTime", match reportTime with | some t => toJson t | none => Json.null),
     ("checkers", toJson (fm.list "checkers"))]
-  let site := data.mergeObj (Json.mkObj [
-    ("meta", metaJson), ("libraries", Json.arr libs), ("comparator", comparatorJson),
-    ("bibliography", optJson bib)])
-  -- Write the page.
   let assets ← match ← IO.getEnv "SHOWCASE_ASSETS" with
     | some a => pure (System.FilePath.mk a)
     | none => do
@@ -533,6 +615,15 @@ def generate (opts : Options) : IO Unit := do
       -- `<package>/.lake/build/bin/showcase`
       pure ((app.parent.bind (·.parent) |>.bind (·.parent) |>.bind (·.parent)).getD "." /
         "assets")
+  let outDir := opts.out.getD (resolvePath ((fm.str? "output").getD "_site"))
+  IO.FS.createDirAll outDir
+  -- The files of the page, next to it: the images and the favicon.
+  let media ← copyImages images outDir
+  let favicon ← installFavicon fm docPath assets outDir
+  let site := data.mergeObj (Json.mkObj [
+    ("meta", metaJson), ("libraries", Json.arr libs), ("comparator", comparatorJson),
+    ("bibliography", optJson bib), ("media", Json.mkObj media.toList)])
+  -- Write the page.
   let template ← IO.FS.readFile (assets / "template.html")
   let style ← IO.FS.readFile (assets / "style.css")
   let script ← IO.FS.readFile (assets / "app.js")
@@ -540,11 +631,10 @@ def generate (opts : Options) : IO Unit := do
   let dataStr := replaceAll site.compress "</" "<\\/"
   let html := template
     |> (replaceAll · "{{TITLE}}" title)
+    |> (replaceAll · "{{FAVICON}}" favicon)
     |> (replaceAll · "/*{{STYLE}}*/" style)
     |> (replaceAll · "/*{{SCRIPT}}*/" script)
     |> (replaceAll · "{{DATA}}" dataStr)
-  let outDir := opts.out.getD (resolvePath ((fm.str? "output").getD "_site"))
-  IO.FS.createDirAll outDir
   IO.FS.writeFile (outDir / "index.html") html
   IO.println s!"showcase: wrote {outDir / "index.html"} ({(html.utf8ByteSize + 512) / 1024} KiB)"
 

@@ -11,6 +11,10 @@ import Lean
 Small string helpers working on characters, and the analysis of Lean source text: splitting a
 declaration into its statement and its proof, extracting the comments of a proof, reading the
 `open` commands of a file and the notations it declares.
+
+The file `showcase.md` is parsed into a `Doc`: its front matter, its body, its named blocks
+```` ```kind Name ```` (mathematical statements, proofs, proof maps, figures) and the images it
+shows.
 -/
 
 namespace Showcase
@@ -182,7 +186,9 @@ def splitStatement (src : String) : String × String := Id.run do
 
 /-- A paragraph of the informal proof: the comments of a proof, with their nesting depth. -/
 structure ProofStep where
+  /-- The rank of the indentation of the comment, from `0`. -/
   depth : Nat
+  /-- The text of the comment. -/
   text : String
   deriving Inhabited
 
@@ -248,8 +254,11 @@ def fileNamespaces (lines : Array String) : Array Lean.Name :=
 structure SourceNotation where
   /-- The notation as written by a reader, e.g. `𝓗[d, H₀]`. -/
   display : String
+  /-- The docstring of the notation, if any. -/
   doc : Option String
+  /-- The command that declares the notation. -/
   source : String
+  /-- The line of the command in the file, from `1`. -/
   line : Nat
   deriving Inhabited
 
@@ -333,6 +342,7 @@ inductive Value where
 
 /-- The front matter of `showcase.md`, a small subset of YAML. -/
 structure FrontMatter where
+  /-- The keys and their values, in the order of the file. -/
   entries : Array (String × Value) := #[]
   deriving Inhabited
 
@@ -428,19 +438,35 @@ inductive Block where
   | decl (name : String) (label : Option String)
   deriving Inhabited
 
+/-- The kinds of the named blocks ```` ```kind Name ```` of `showcase.md`, with the key of their
+texts in the data of the page. -/
+def namedKinds : Array (String × String) :=
+  #[("informal", "informal"), ("proof", "proofs"), ("diagram", "diagrams"), ("sketch", "sketches"),
+    ("figure", "figures")]
+
 /-- The parsed `showcase.md`. -/
 structure Doc where
+  /-- The front matter. -/
   fm : FrontMatter
+  /-- The body, as Markdown text and declarations to display. -/
   blocks : Array Block
-  /-- The mathematical versions of declarations, from the blocks ```` ```informal Name ````, as
-  pairs of the name (as written) and the Markdown text. -/
-  informal : Array (String × String) := #[]
-  /-- The mathematical proofs of results, from the blocks ```` ```proof Name ````. -/
-  proofs : Array (String × String) := #[]
+  /-- The named blocks ```` ```kind Name ````, as triples of the kind (see `namedKinds`), the name
+  of a declaration (as written) and the text. The kinds are the following.
+  * `informal`: the mathematical version of the declaration.
+  * `proof`: the mathematical proof of a result, folded under its statement.
+  * `diagram`: the proof map of a result, one node per line, parsed by the page.
+  * `sketch`: the short proof of a result.
+  * `figure`: a figure of a result, with one image per line, written `path` or `path | caption`,
+    then the caption of the figure. -/
+  named : Array (String × String × String) := #[]
   /-- The titles of declarations, from the blocks ```` ```informal Name | Title ````. They replace
   the titles of the docstrings. -/
   titles : Array (String × String) := #[]
   deriving Inhabited
+
+/-- The named blocks of `doc` of kind `kind`, as pairs of the name and the text. -/
+def Doc.ofKind (doc : Doc) (kind : String) : Array (String × String) :=
+  doc.named.filterMap fun (k, n, t) => if k == kind then some (n, t) else none
 
 /-- The directive `{{Name | Label}}` of a line, if any. -/
 def directive? (line : String) : Option (String × Option String) :=
@@ -467,32 +493,30 @@ def parseDoc (content : String) : Doc := Id.run do
   let mut blocks : Array Block := #[]
   let mut buf : Array String := #[]
   let mut inFence := false
-  let mut informal : Array (String × String) := #[]
-  let mut proofs : Array (String × String) := #[]
+  let mut named : Array (String × String × String) := #[]
   let mut titles : Array (String × String) := #[]
-  -- the block ```` ```informal Name ```` or ```` ```proof Name ```` being read: whether it is a
-  -- proof, the name and the lines
-  let mut cur : Option (Bool × String × Array String) := none
+  -- the named block being read: its kind, the name and the lines
+  let mut cur : Option (String × String × Array String) := none
   for line in lines.extract start lines.size do
-    if let some (isProof, n, ls) := cur then
-      if hasPrefix (strip line) "```" then
-        if isProof then proofs := proofs.push (n, "\n".intercalate ls.toList)
-        else informal := informal.push (n, "\n".intercalate ls.toList)
+    let t := strip line
+    if let some (kind, n, ls) := cur then
+      if hasPrefix t "```" then
+        named := named.push (kind, n, "\n".intercalate ls.toList)
         cur := none
-      else cur := some (isProof, n, ls.push line)
+      else cur := some (kind, n, ls.push line)
       continue
-    if !inFence && hasPrefix (strip line) "```informal " then
-      let header := strip (dropN (strip line) "```informal ".length)
-      match header.splitOn "|" with
-      | n :: t :: more =>
-        titles := titles.push (strip n, strip ("|".intercalate (t :: more)))
-        cur := some (false, strip n, #[])
-      | _ => cur := some (false, header, #[])
-      continue
-    if !inFence && hasPrefix (strip line) "```proof " then
-      cur := some (true, strip (dropN (strip line) "```proof ".length), #[])
-      continue
-    if hasPrefix (stripLeft line) "```" then inFence := !inFence
+    -- A block ```` ```figure ```` without a name stays in the text, where the page draws it.
+    if !inFence then
+      if let some (kind, _) := namedKinds.find? fun (k, _) => hasPrefix t ("```" ++ k ++ " ") then
+        -- `Name`, or `Name | Title` for a block `informal`
+        let header := strip (dropN t ("```" ++ kind ++ " ").length)
+        let parts := header.splitOn "|"
+        let n := strip (parts.headD header)
+        if kind == "informal" && parts.length > 1 then
+          titles := titles.push (n, strip ("|".intercalate (parts.drop 1)))
+        cur := some (kind, n, #[])
+        continue
+    if hasPrefix t "```" then inFence := !inFence
     match (if inFence then none else directive? line) with
     | some (n, label) =>
       if buf.any (strip · != "") then blocks := blocks.push (.md ("\n".intercalate buf.toList))
@@ -500,6 +524,54 @@ def parseDoc (content : String) : Doc := Id.run do
       blocks := blocks.push (.decl n label)
     | none => buf := buf.push line
   if buf.any (strip · != "") then blocks := blocks.push (.md ("\n".intercalate buf.toList))
-  return { fm := parseFrontMatter fmLines, blocks, informal, proofs, titles }
+  return { fm := parseFrontMatter fmLines, blocks, named, titles }
+
+/-- The extensions of the images that browsers display. -/
+def imageExtensions : List String := ["svg", "png", "jpg", "jpeg", "gif", "webp", "avif"]
+
+/-- Whether `s` is the path of an image that browsers display, without whitespace. -/
+def isImagePath (s : String) : Bool :=
+  !s.toList.any Char.isWhitespace &&
+    ((System.FilePath.mk s).extension.map String.toLower).any imageExtensions.contains
+
+/-- The image of a line of a figure block, written `path` or `path | caption`. -/
+def figureImage? (line : String) : Option String :=
+  let p := strip ((line.splitOn "|").headD "")
+  if isImagePath p then some p else none
+
+/-- The images that a Markdown text shows: those of its blocks ```` ```figure ````, and its images
+`![alt](path)` or `![alt](path "title")` outside code blocks. -/
+def markdownImages (md : String) : Array String := Id.run do
+  let mut out : Array String := #[]
+  -- the code block being read, if any, and whether it is a figure
+  let mut fence : Option Bool := none
+  for line in splitLines md do
+    let t := strip line
+    if hasPrefix t "```" then
+      fence := if fence.isSome then none else some (t == "```figure" || hasPrefix t "```figure ")
+      continue
+    match fence with
+    | some true => if let some p := figureImage? t then out := out.push p
+    | some false => pure ()
+    | none =>
+      let cs := line.toList.toArray
+      let mut i := 0
+      while i < cs.size do
+        let some a := findSub cs "![".toList i | break
+        let some b := findSub cs "](".toList (a + 2) | break
+        let some c := findSub cs [')'] (b + 2) | break
+        let p := ((strip (slice cs (b + 2) c)).splitOn " ").headD ""
+        if isImagePath p then out := out.push p
+        i := c + 1
+  return out
+
+/-- The local images that `showcase.md` shows, without repetition: those of its text, of its
+abstract and of its named blocks. The remote images, given by a URL, are left to the browser. -/
+def Doc.imagePaths (doc : Doc) : Array String :=
+  let texts := doc.blocks.filterMap (fun | .md t => some t | .decl .. => none) ++
+    (doc.fm.str? "abstract").toList.toArray ++
+    (doc.named.filter (·.1 != "figure")).map (·.2.2)
+  let figures := (doc.ofKind "figure").flatMap fun (_, t) => (splitLines t).filterMap figureImage?
+  ((texts.flatMap markdownImages ++ figures).toList.eraseDups.filter (!containsSub · "://")).toArray
 
 end Showcase
