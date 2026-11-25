@@ -102,6 +102,34 @@ def titleAndLead (md : String) : Option String × Option String := Id.run do
     para := para.push t
   return (title, if para.isEmpty then none else some (" ".intercalate para.toList))
 
+/-- The modules that `mod` imports, read from its source, or `none` if the source is not found. -/
+def sourceImports? (mod : Name) : IO (Option (Array Name)) := do
+  let some p ← (try findSource mod catch _ => pure none) | return none
+  let (imports, _, _) ← Elab.parseImports (← IO.FS.readFile p) p.toString
+  return some (imports.map (·.module))
+
+/-- The modules that `mod` imports, directly or transitively, or `none` if its source is not found.
+Every import counts (`public`, private, `meta`), so this bounds what the statements of `mod` can
+depend on. The imports of a module are those of `env` when it is loaded there, those of its source
+otherwise. -/
+def importClosure? (env : Environment) (mod : Name) : IO (Option NameSet) := do
+  let some direct ← sourceImports? mod | return none
+  let mut graph : Std.HashMap Name (Array Name) := {}
+  for (m, d) in env.header.moduleNames.zip env.header.moduleData do
+    graph := graph.insert m (d.imports.map (·.module))
+  let mut seen : NameSet := {}
+  let mut todo := direct
+  while !todo.isEmpty do
+    let m := todo.back!
+    todo := todo.pop
+    if seen.contains m then continue
+    seen := seen.insert m
+    let imports ← match graph.get? m with
+      | some imports => pure imports
+      | none => pure ((← sourceImports? m).getD #[])
+    todo := todo ++ imports
+  return some seen
+
 /-- Options of the command line. -/
 structure Options where
   doc : System.FilePath := "showcase.md"
@@ -174,8 +202,9 @@ def generate (opts : Options) : IO Unit := do
     origins := origins.insert m o
   let mainOrigin := origins.getD mainModule ""
   -- The project is the package of the main module.
-  origins := origins.fold (init := {}) fun acc m o =>
-    acc.insert m (if o == mainOrigin then "" else if o == "" then "?" else o)
+  let projectOrigin (o : String) : String :=
+    if o == mainOrigin then "" else if o == "" then "?" else o
+  origins := origins.fold (init := {}) fun acc m o => acc.insert m (projectOrigin o)
   let mut sources : Std.HashMap Name (Array String) := {}
   for (m, o) in origins.toList do
     if o != "" then continue
@@ -408,6 +437,30 @@ def generate (opts : Options) : IO Unit := do
   let mut moduleCounts : Std.HashMap String Nat := {}
   for (_, o) in origins.toList do
     moduleCounts := moduleCounts.insert o (moduleCounts.getD o 0 + 1)
+  -- The modules that the challenge of comparator imports, by package. Comparator checks the
+  -- statements of the formalization against those of the challenge and replays its proofs, so a
+  -- library that only the proofs import is checked, not trusted.
+  let challengeModule : Option Name := comparatorCfg.bind fun j =>
+    (j.getObjValAs? String "challenge_module").toOption.map String.toName
+  let challengeImports ← match challengeModule with
+    | some c => do
+      let r ← importClosure? env c
+      if r.isNone then
+        IO.eprintln s!"showcase: warning: cannot find the source of the challenge {c}, every \
+          imported library is shown as trusted"
+      pure r
+    | none => pure none
+  let challengeCounts ← challengeImports.mapM fun ms => do
+    let mut counts : Std.HashMap String Nat := {}
+    for m in ms.toArray do
+      let o ← match origins.get? m with
+        | some o => pure o
+        | none => do
+          let o ← try pure (originOf libDir (← findOLean m)) catch _ => pure "lean"
+          pure (projectOrigin o)
+      counts := counts.insert o (counts.getD o 0 + 1)
+    return counts
+  let challenge := if challengeCounts.isSome then challengeModule else none
   let descriptions := fm.map "libraries"
   -- The dependencies of Mathlib (Batteries, Aesop, ...) come with it: the website does not list
   -- them on their own.
@@ -433,6 +486,7 @@ def generate (opts : Options) : IO Unit := do
           ("inputRev", optJson (p.getObjValAs? String "inputRev").toOption),
           ("direct", toJson !((p.getObjValAs? Bool "inherited").toOption.getD false)),
           ("modules", toJson (moduleCounts.getD name 0)),
+          ("challengeModules", toJson (challengeCounts.map (·.getD name 0))),
           ("description", optJson ((descriptions.find? (·.1 == name)).map (·.2)))]
   let toolchain ← do
     let p := root / "lean-toolchain"
@@ -458,6 +512,9 @@ def generate (opts : Options) : IO Unit := do
     ("lean", toJson Lean.versionString), ("toolchain", optJson toolchain),
     ("coreModules", toJson (moduleCounts.getD "lean" 0)),
     ("projectModules", toJson (moduleCounts.getD "" 0)),
+    ("challenge", match challenge with | some c => nameJson c | none => Json.null),
+    ("challengeCoreModules", toJson (challengeCounts.map (·.getD "lean" 0))),
+    ("challengeProjectModules", toJson (challengeCounts.map (·.getD "" 0))),
     ("links", Json.mkObj ((fm.map "links").toList.map fun (k, v) => (k, toJson v))),
     ("axiomDocs", Json.mkObj ((fm.map "axioms").toList.map fun (k, v) => (k, toJson v)))]
   let comparatorJson := Json.mkObj [

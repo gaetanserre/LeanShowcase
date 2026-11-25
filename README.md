@@ -6,7 +6,11 @@ the results rest on, in four screens.
 
 1. **Libraries.** Lean, Mathlib, and the other libraries of `lake-manifest.json` (Tau Ceti, ...),
    marked as outside Mathlib, with the number of their modules that the formalization imports. The
-   dependencies of Mathlib (Batteries, Aesop, ...) are counted with Mathlib and not listed.
+   dependencies of Mathlib (Batteries, Aesop, ...) are counted with Mathlib and not listed. With a
+   `comparator.json`, the libraries to trust are those that its `challenge_module` imports,
+   directly or transitively. Comparator checks the statements against the challenge and replays
+   the proofs, so a library that only the proofs import is listed apart, as checked by comparator.
+   The module counts follow the same split.
 2. **Axioms.** The axioms used by the displayed results, computed by Lean, with an explanation, the
    Lean statement and links.
 3. **Definitions.** The definitions of the project that the displayed statements depend on,
@@ -132,25 +136,25 @@ follows it by a line break.
 
 Only `module` is required.
 
-| Key                              | Default                                             | Meaning                                                                                         |
-| -------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `module`                         |                                                     | The module whose results are displayed.                                                         |
-| `trusted`                        | `[]`                                                | Modules whose definitions are all listed on the definitions screen.                             |
-| `title`, `abstract`              | first heading and paragraph of the module docstring |                                                                                                 |
-| `subtitle`, `paper`, `paper_url` |                                                     | Shown on the first screen.                                                                      |
-| `authors`                        | the `Authors:` line of the module header            | A list.                                                                                         |
-| `docgen`                         |                                                     | The docgen of the project, for the links to its declarations.                                   |
-| `docgen_external`                | Mathlib's docgen                                    | The docgen of the dependencies.                                                                 |
-| `docgen_packages`                |                                                     | A map from package names to docgen URLs.                                                        |
-| `links`                          |                                                     | A map from declaration names to a page about them (Wikipedia, ...).                             |
-| `libraries`                      | built in for common packages                        | A map from package names to descriptions.                                                       |
-| `axioms`                         | built in for Lean's axioms                          | A map from axiom names to descriptions.                                                         |
-| `bibliography`                   |                                                     | A BibTeX file.                                                                                  |
-| `comparator`                     | `comparator.json` of the project                    | The configuration of `lake comparator`: the checked theorems get a badge.                       |
-| `comparator_report`              | `comparator-report.json`                            | The output of `lake comparator --json`, written by `--comparator`. The badge shows its verdict. |
-| `checkers`                       |                                                     | The checkers to show on the badge when there is no report.                                      |
-| `repository`, `rev`              | `git remote get-url origin`, `git rev-parse HEAD`   | For the links to the source.                                                                    |
-| `output`                         | `_site`                                             | The output folder.                                                                              |
+| Key                              | Default                                             | Meaning                                                                                                                              |
+| -------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `module`                         |                                                     | The module whose results are displayed.                                                                                              |
+| `trusted`                        | `[]`                                                | Modules whose definitions are all listed on the definitions screen.                                                                  |
+| `title`, `abstract`              | first heading and paragraph of the module docstring |                                                                                                                                      |
+| `subtitle`, `paper`, `paper_url` |                                                     | Shown on the first screen.                                                                                                           |
+| `authors`                        | the `Authors:` line of the module header            | A list.                                                                                                                              |
+| `docgen`                         |                                                     | The docgen of the project, for the links to its declarations.                                                                        |
+| `docgen_external`                | Mathlib's docgen                                    | The docgen of the dependencies.                                                                                                      |
+| `docgen_packages`                |                                                     | A map from package names to docgen URLs.                                                                                             |
+| `links`                          |                                                     | A map from declaration names to a page about them (Wikipedia, ...).                                                                  |
+| `libraries`                      | built in for common packages                        | A map from package names to descriptions.                                                                                            |
+| `axioms`                         | built in for Lean's axioms                          | A map from axiom names to descriptions.                                                                                              |
+| `bibliography`                   |                                                     | A BibTeX file.                                                                                                                       |
+| `comparator`                     | `comparator.json` of the project                    | The configuration of `lake comparator`. The checked theorems get a badge. Only the libraries that its challenge imports are trusted. |
+| `comparator_report`              | `comparator-report.json`                            | The output of `lake comparator --json`, written by `--comparator`. The badge shows its verdict.                                      |
+| `checkers`                       |                                                     | The checkers to show on the badge when there is no report.                                                                           |
+| `repository`, `rev`              | `git remote get-url origin`, `git rev-parse HEAD`   | For the links to the source.                                                                                                         |
+| `output`                         | `_site`                                             | The output folder.                                                                                                                   |
 
 Paths are relative to `showcase.md`. Values are strings, inline lists `[a, b]`, lists of `- item`
 lines, maps of indented `key: value` lines, or text blocks introduced by `>` (lines joined) or `|`
@@ -190,7 +194,9 @@ On Linux, comparator runs in its sandbox, and the website says so.
   every token, for the links;
 * `collectAxioms`, for the axioms;
 * the constants used by the types and the bodies of definitions, for the definitions to trust;
-* `lake-manifest.json` and the location of every imported `.olean`, for the libraries.
+* `lake-manifest.json` and the location of every imported `.olean`, for the libraries;
+* the imports of the challenge module of comparator, read from its source and followed through
+  every kind of import, for the libraries to trust.
 
 It then fills the template of `assets/` with this data. The site uses no JavaScript library, except
 MathJax for the mathematics.

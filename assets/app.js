@@ -681,13 +681,19 @@
 
   /* ------------------------------------------------------------------ pages */
 
-  /* The libraries a reader has to trust: Mathlib (with its own dependencies, counted with it) and
-     the libraries outside Mathlib. */
+  /* The libraries of the formalization: Mathlib (with its own dependencies, counted with it) and
+     the libraries outside Mathlib. With a challenge of comparator, the reader trusts only those that
+     the challenge imports. Comparator checks the others, which only the proofs use. */
+  const hasChallenge = !!M.challenge;
+  const sumParts = (l, key) => l[key] + (D.libraries || []).filter((x) => x.partOf === l.name)
+    .reduce((n, x) => n + (x[key] || 0), 0);
   const libs = (D.libraries || []).filter((l) => !l.partOf).map((l) => l.name.toLowerCase() !== "mathlib" ? l :
-    Object.assign({}, l, { modules: l.modules + (D.libraries || []).filter((x) => x.partOf === l.name)
-      .reduce((n, x) => n + x.modules, 0) })).sort((a, b) =>
+    Object.assign({}, l, { modules: sumParts(l, "modules"),
+      challengeModules: hasChallenge ? sumParts(l, "challengeModules") : null })).sort((a, b) =>
     (b.direct - a.direct) || (b.modules - a.modules) || a.name.localeCompare(b.name));
   const usedLibs = libs.filter((l) => l.modules > 0);
+  const trustedLibs = hasChallenge ? usedLibs.filter((l) => l.challengeModules > 0) : usedLibs;
+  const checkedLibs = hasChallenge ? usedLibs.filter((l) => !(l.challengeModules > 0)) : [];
 
   function pageIntro() {
     const nAx = (D.axioms || []).length;
@@ -709,7 +715,7 @@
       conclusions follow from their starting points, listed below. Review them, then read the
       results.</p>
       <div class="ledger">
-        <a href="#libraries"><span class="step">Step 1</span><span class="num">${usedLibs.length + 1}</span><span class="what">Libraries</span><span class="why">Lean and the libraries whose definitions the statements use.</span></a>
+        <a href="#libraries"><span class="step">Step 1</span><span class="num">${trustedLibs.length + 1}</span><span class="what">Libraries</span><span class="why">Lean and the libraries whose definitions the statements use.</span></a>
         <a href="#axioms"><span class="step">Step 2</span><span class="num">${nAx}</span><span class="what">Axioms</span><span class="why">The principles assumed without proof.</span></a>
         <a href="#definitions"><span class="step">Step 3</span><span class="num">${nDef}</span><span class="what">Definitions</span><span class="why">What the project defines. No checker can tell whether they mean what they should.</span></a>
       </div>
@@ -727,36 +733,50 @@
   }
 
   function pageLibraries() {
+    const mods = (n) => `${n || 0} module${n === 1 ? "" : "s"}`;
     const lean = `<article class="item">
-      <div class="item-head"><h3>Lean ${esc(M.lean || "")}</h3><span class="tag">${M.coreModules || 0} modules imported</span></div>
+      <div class="item-head"><h3>Lean ${esc(M.lean || "")}</h3><span class="tag">${hasChallenge ? mods(M.challengeCoreModules) + " imported by the statements" : mods(M.coreModules) + " imported"}</span></div>
       <p class="desc">The language, its kernel and its core libraries (<code class="lean">Init</code>, <code class="lean">Std</code>, <code class="lean">Lean</code>). The kernel is the small program that checks every proof.</p>
       <div class="links"><a href="https://lean-lang.org" target="_blank" rel="noopener">lean-lang.org</a><a href="https://github.com/leanprover/lean4" target="_blank" rel="noopener">github.com/leanprover/lean4</a>${M.toolchain ? `<span class="muted">${esc(M.toolchain)}</span>` : ""}</div>
     </article>`;
-    const item = (l) => {
+    // `checked`: a library that only the proofs import, checked by comparator
+    const item = (l, checked) => {
       const isMathlib = l.name.toLowerCase() === "mathlib";
       const desc = l.description || LIBS[l.name.toLowerCase()] || (isMathlib ? "" : LIBS["*"]);
       const url = (l.url || "").replace(/\.git$/, "");
       const rev = l.rev ? `<span class="muted">${esc(l.inputRev || "")}${l.inputRev ? " · " : ""}${esc(l.rev.slice(0, 10))}</span>` : "";
       const used = l.modules > 0;
+      const count = !used ? "not imported"
+        : checked ? mods(l.modules) + " imported by the proofs"
+          : hasChallenge ? mods(l.challengeModules) + " imported by the statements"
+            : mods(l.modules) + " imported";
+      const mark = checked
+        ? (CMP.state === "verified" || CMP.state === "declared" ? `<a class="tag ok" href="#comparator" title="Checked by comparator">✓ checked</a>` : "")
+        : isMathlib ? "" : `<span class="tag trust">outside Mathlib</span>`;
       return `<article class="item ${used ? "" : "dim"}">
         <div class="item-head"><h3>${esc(LIB_NAMES[l.name.toLowerCase()] || l.name)}</h3>
-          ${isMathlib ? "" : `<span class="tag trust">outside Mathlib</span>`}
-          <span class="tag">${used ? l.modules + " modules imported" : "not imported"}</span></div>
+          ${mark}
+          <span class="tag">${count}</span></div>
         ${desc ? `<p class="desc">${inline(desc)}</p>` : ""}
         <div class="links">${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(url.replace(/^https?:\/\//, ""))}</a>` : ""}${rev}</div>
       </article>`;
     };
     const unused = libs.filter((l) => l.modules === 0);
+    const libModules = (key, core) => (M[core] || 0) + (D.libraries || []).reduce((n, l) => n + (l[key] || 0), 0);
+    const counts = hasChallenge
+      ? `The statements import ${mods(M.challengeProjectModules)} of the project and ${mods(libModules("challengeModules", "challengeCoreModules"))} of libraries. With the proofs, ${mods(M.projectModules)} of the project and ${mods(libModules("modules", "coreModules"))} of libraries are imported.`
+      : `${mods(M.projectModules)} of the project, ${mods(libModules("modules", "coreModules"))} of libraries are imported.`;
     return `<main class="page"><div class="col">
       <div class="trust-head"><div class="eyebrow">Step 1 of 3</div><h1>The libraries</h1>
       <p>The statements use notions defined in other libraries: real numbers, measures, integrals,
       derivatives. Lean checks the proofs of these libraries like those of the project. What you
       trust is that their definitions mean what their names say: that the integral of Mathlib is the
       Lebesgue integral, for instance. Mathlib is developed and reviewed by a large community of
-      mathematicians.${libs.some((l) => l.name.toLowerCase() !== "mathlib") ? " The other libraries are not: read their definitions with the same care as those of the project." : ""}</p>
-      <p class="muted small sans">${M.projectModules || 0} modules of the project, ${(M.coreModules || 0) + (D.libraries || []).reduce((n, l) => n + l.modules, 0)} modules of libraries are imported.</p></div>
-      <div class="trust-list">${lean}${libs.filter((l) => l.modules > 0).map(item).join("")}</div>
-      ${unused.length ? `<div class="group-title"><h2>Required but not imported</h2></div><p class="group-sub">The build fetches these packages, but no file of the formalization imports them.</p><div class="trust-list">${unused.map(item).join("")}</div>` : ""}
+      mathematicians.${trustedLibs.some((l) => l.name.toLowerCase() !== "mathlib") ? " The other libraries are not: read their definitions with the same care as those of the project." : ""}</p>
+      <p class="muted small sans">${counts}</p></div>
+      <div class="trust-list">${lean}${trustedLibs.map((l) => item(l, false)).join("")}</div>
+      ${checkedLibs.length ? `<div class="group-title"><h2>Checked by comparator</h2></div><p class="group-sub">Only the proofs use these libraries. <a href="#comparator">Comparator</a> checks that the statements are those of the challenge, which does not import them, and it replays every proof. You do not need to trust them.</p><div class="trust-list">${checkedLibs.map((l) => item(l, true)).join("")}</div>` : ""}
+      ${unused.length ? `<div class="group-title"><h2>Required but not imported</h2></div><p class="group-sub">The build fetches these packages, but no file of the formalization imports them.</p><div class="trust-list">${unused.map((l) => item(l, false)).join("")}</div>` : ""}
       ${acceptBar("libraries", "axioms", "Axioms", "Accepting means trusting that these libraries define what they claim.")}
     </div></main>`;
   }
@@ -1013,7 +1033,7 @@
       <div class="intro-meta">${badge()}${(M.authors || []).length ? `<span>${esc(M.authors.join(", "))}</span>` : ""}</div>
       <div class="trustline">
         <span>These results rest on</span>
-        <a href="#libraries">${usedLibs.length + 1} libraries</a>·<a href="#axioms">${(D.axioms || []).length} axioms</a>·<a href="#definitions">${trustCount + notationCount} definitions</a>
+        <a href="#libraries">${trustedLibs.length + 1} libraries</a>·<a href="#axioms">${(D.axioms || []).length} axioms</a>·<a href="#definitions">${trustCount + notationCount} definitions</a>
         ${pending.length ? `<span>· not yet reviewed: ${pending.map((s) => `<a href="#${s[0]}">${s[1].toLowerCase()}</a>`).join(", ")}</span>` : `<span>· reviewed ✓</span>`}
       </div>
       ${body}
