@@ -181,6 +181,9 @@ button { font: inherit; color: inherit; }
 .item-head h3 { margin: 0; font-size: 1.125rem; min-width: 0; overflow-wrap: anywhere; }
 .item-head h3 code { font-size: .9em; }
 .item-head .tag:first-of-type { margin-left: auto; }
+/* the status of a library stays next to its name, its module count goes to the right */
+.item-head .tag.mark { margin-left: 0; }
+.item-head .tag.count { margin-left: auto; }
 .item .desc { margin-top: .45rem; }
 .item .desc p + p { margin-top: .5rem; }
 .item pre.code { margin-top: .75rem; }

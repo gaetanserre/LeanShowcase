@@ -64,7 +64,9 @@
     "mathlib": "The community library of formalized mathematics: algebra, analysis, measure theory, " +
       "probability, topology... The statements use its definitions (real numbers, measures, " +
       "integrals, derivatives, Hilbert spaces).",
-    "tauceti": "A library of formalized mathematics built on Mathlib.",
+    "tauceti": "A library of formalized mathematics built on Mathlib, incubated by the Lean FRO and " +
+      "the Mathlib Initiative. Humans write its roadmaps and the public criteria of its review. AIs " +
+      "write its code, and other AIs review it against these criteria.",
     "*": "A library outside Mathlib. Its definitions are not reviewed by the Mathlib community.",
   };
   const LIB_NAMES = { "mathlib": "Mathlib", "tauceti": "Tau Ceti" };
@@ -751,12 +753,12 @@
           : hasChallenge ? mods(l.challengeModules) + " imported by the statements"
             : mods(l.modules) + " imported";
       const mark = checked
-        ? (CMP.state === "verified" || CMP.state === "declared" ? `<a class="tag ok" href="#comparator" title="Checked by comparator">✓ checked</a>` : "")
-        : isMathlib ? "" : `<span class="tag trust">outside Mathlib</span>`;
+        ? (CMP.state === "verified" || CMP.state === "declared" ? `<a class="tag ok mark" href="#comparator" title="Checked by comparator">✓ checked</a>` : "")
+        : isMathlib ? "" : `<span class="tag trust mark">outside Mathlib</span>`;
       return `<article class="item ${used ? "" : "dim"}">
         <div class="item-head"><h3>${esc(LIB_NAMES[l.name.toLowerCase()] || l.name)}</h3>
           ${mark}
-          <span class="tag">${count}</span></div>
+          <span class="tag count">${count}</span></div>
         ${desc ? `<p class="desc">${inline(desc)}</p>` : ""}
         <div class="links">${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(url.replace(/^https?:\/\//, ""))}</a>` : ""}${rev}</div>
       </article>`;
