@@ -11,10 +11,10 @@ proved, what it rests on, and how it is proved.
    * **Libraries.** Lean, Mathlib, and the other libraries of `lake-manifest.json` (Tau Ceti, ...),
      marked as outside Mathlib, with the number of their modules that the formalization imports.
      The dependencies of Mathlib (Batteries, Aesop, ...) are counted with Mathlib and not listed.
-     With a `comparator.json`, the libraries to trust are those that its `challenge_module`
-     imports, directly or transitively. Comparator checks the statements against the challenge and
-     replays the proofs, so a library that only the proofs import is listed apart, as checked by
-     comparator. The module counts follow the same split.
+     With an accepted report of comparator, the libraries to trust are those that its
+     `challenge_module` imports, directly or transitively. Comparator checks the statements against
+     the challenge and replays the proofs, so a library that only the proofs import is listed apart,
+     as checked by comparator. The module counts follow the same split.
    * **Axioms.** One line, e.g. "only the standard axioms of Lean, and no `sorry`", and the axioms
      used by the displayed results, computed by Lean, with an explanation, the Lean statement and
      links, folded for the curious.
@@ -28,7 +28,8 @@ proved, what it rests on, and how it is proved.
    definition), and the Lean source. It opens with the statements of the main results, each with a
    link to its card, where they are marked.
 
-A badge links to an explanation of `lake comparator` and of the checkers it runs.
+A badge shows the verdict of `lake comparator` and links to an explanation of the checkers it
+runs. Without a report, there is no badge.
 
 The output is a static folder. It holds `index.html`, with the data and the code of the page, and the
 images and the favicon next to it. The reader needs no server and no build step.
@@ -222,7 +223,6 @@ Only `module` is required.
 | `bibliography`                   |                                                     | A BibTeX file.                                                                                                                       |
 | `comparator`                     | `comparator.json` of the project                    | The configuration of `lake comparator`. The checked theorems get a badge. Only the libraries that its challenge imports are trusted. |
 | `comparator_report`              | `comparator-report.json`                            | The output of `lake comparator --json`, written by `--comparator`. The badge shows its verdict.                                      |
-| `checkers`                       |                                                     | The checkers to show on the badge when there is no report.                                                                           |
 | `repository`, `rev`              | `git remote get-url origin`, `git rev-parse HEAD`   | For the links to the source.                                                                                                         |
 | `output`                         | `_site`                                             | The output folder.                                                                                                                   |
 | `favicon`                        | the icon of Showcase, `⊢` on a blue square          | An image, relative to `showcase.md`.                                                                                                 |

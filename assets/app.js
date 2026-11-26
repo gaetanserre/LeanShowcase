@@ -647,17 +647,18 @@
       return { state: rep.judgement === "accepted" ? "verified" : "rejected", kernels, failed, skipped,
         kernelJudgements, failedSteps, sandboxed: rep.sandboxed !== false, date };
     }
-    return { state: c.config ? "declared" : "none", kernels: c.checkers || [] };
+    // Without a report, nothing has been checked: the website shows no verdict.
+    return { state: "none", kernels: [] };
   }
   const CMP = comparatorState();
 
   function badge() {
     if (CMP.state === "none") return "";
-    const label = CMP.state === "verified" ? "✓ Checked" : CMP.state === "rejected" ? "✗ Rejected" : "✓ Checked";
+    const label = CMP.state === "verified" ? "✓ Checked" : "✗ Rejected";
     const ks = CMP.kernels.length ? CMP.kernels.join(" · ") : "comparator";
-    const note = CMP.state !== "declared" && !CMP.sandboxed ? " · without sandbox" : "";
+    const note = CMP.sandboxed ? "" : " · without sandbox";
     const text = CMP.state === "rejected" ? rejectionReason() : `by ${ks}`;
-    return `<a class="badge ${CMP.state === "declared" ? "declared" : CMP.state}" href="#comparator" title="What does this mean?"><span class="k">${label}</span><span class="v">${esc(text)}${note}</span></a>`;
+    return `<a class="badge ${CMP.state}" href="#comparator" title="What does this mean?"><span class="k">${label}</span><span class="v">${esc(text)}${note}</span></a>`;
   }
 
   function bar(route) {
@@ -686,17 +687,26 @@
 
   /* The libraries of the formalization: Mathlib (with its own dependencies, counted with it) and
      the libraries outside Mathlib. With a challenge of comparator, the reader trusts only those that
-     the challenge imports. Comparator checks the others, which only the proofs use. */
-  const hasChallenge = !!M.challenge;
+     the challenge imports. Comparator checks the others, which only the proofs use, unless it rejected
+     the formalization. */
+  const hasChallenge = !!M.challenge && CMP.state !== "none";
+  // Mathlib first, even when it comes through another library, as Tau Ceti.
+  const isMathlibLib = (l) => (l.name.toLowerCase() === "mathlib" ? 1 : 0);
   const sumParts = (l, key) => l[key] + (D.libraries || []).filter((x) => x.partOf === l.name)
     .reduce((n, x) => n + (x[key] || 0), 0);
   const libs = (D.libraries || []).filter((l) => !l.partOf).map((l) => l.name.toLowerCase() !== "mathlib" ? l :
     Object.assign({}, l, { modules: sumParts(l, "modules"),
       challengeModules: hasChallenge ? sumParts(l, "challengeModules") : null })).sort((a, b) =>
-    (b.direct - a.direct) || (b.modules - a.modules) || a.name.localeCompare(b.name));
+    (isMathlibLib(b) - isMathlibLib(a)) || (b.direct - a.direct) || (b.modules - a.modules) ||
+    a.name.localeCompare(b.name));
   const usedLibs = libs.filter((l) => l.modules > 0);
-  const trustedLibs = hasChallenge ? usedLibs.filter((l) => l.challengeModules > 0) : usedLibs;
-  const checkedLibs = hasChallenge ? usedLibs.filter((l) => !(l.challengeModules > 0)) : [];
+  // With a challenge, the libraries that the statements import, and those that only the proofs import.
+  const statementLibs = hasChallenge ? usedLibs.filter((l) => l.challengeModules > 0) : usedLibs;
+  const proofLibs = hasChallenge ? usedLibs.filter((l) => !(l.challengeModules > 0)) : [];
+  // The libraries of the proofs are checked, not trusted, only if comparator accepted the proofs.
+  const replayed = CMP.state === "verified";
+  const trustedLibs = replayed ? statementLibs : usedLibs;
+  const checkedLibs = replayed ? proofLibs : [];
 
   /* The main results of the front matter (`main:`), shown first, as on the first page of a paper. */
   const MAIN = (D.main || []).filter((m) => decls[m.name]);
@@ -704,6 +714,8 @@
 
   /* A list of names: "a", "a and b", "a, b and c". */
   const listOf = (xs) => xs.length <= 1 ? xs.join("") : xs.slice(0, -1).join(", ") + " and " + xs[xs.length - 1];
+  /* The names of libraries, as shown on the website. */
+  const names = (ls) => ls.map((l) => esc(LIB_NAMES[l.name.toLowerCase()] || l.name));
 
   /* What the results rest on, in one line each: the checker, the axioms, the libraries and the
      definitions, with links to their sections of the foundations. */
@@ -719,9 +731,16 @@
       : `Only the standard axioms of Lean${axs.length ? ` (${listOf(axs.map(code))})` : ""}, and no ${code("sorry")}.`;
   }
   function restsOn() {
-    const names = (ls) => ls.map((l) => esc(LIB_NAMES[l.name.toLowerCase()] || l.name));
-    const libsLine = `The statements use ${listOf(["Lean"].concat(names(trustedLibs)))}.${checkedLibs.length
-      ? ` ${listOf(names(checkedLibs))} ${checkedLibs.length > 1 ? "are" : "is"} used only in the proofs, which comparator replays: you do not need to trust ${checkedLibs.length > 1 ? "them" : "it"}.` : ""}`;
+    const it = (ls) => (ls.length > 1 ? "them" : "it");
+    const proofsLine = !proofLibs.length ? ""
+      : ` ${listOf(names(proofLibs))} ${proofLibs.length > 1 ? "are" : "is"} used only in the proofs${replayed
+        ? `, which comparator replays. You do not need to trust ${it(proofLibs)}.`
+        : `. Comparator rejected the formalization, so you trust ${it(proofLibs)} too.`}`;
+    // Without a challenge, nothing tells the libraries of the statements from those of the proofs.
+    const libsLine = hasChallenge
+      ? `The statements use ${listOf(["Lean"].concat(names(statementLibs)))}.${proofsLine}`
+      : `The formalization uses ${listOf(["Lean"].concat(names(usedLibs)))}.${usedLibs.length
+        ? " Without a verdict of comparator, you trust all of them." : ""}`;
     const nDef = trustCount + notationCount;
     const defsLine = nDef
       ? `${nDef} definition${nDef > 1 ? "s" : ""} of the project. No checker can tell whether they mean what they should: read them.`
@@ -738,7 +757,16 @@
   function pageIntro() {
     const authors = (M.authors || []).join(", ");
     const paper = M.paper ? (M.paperUrl ? `<a href="${esc(M.paperUrl)}" target="_blank" rel="noopener">${esc(M.paper)}</a>` : esc(M.paper)) : "";
+    // One, two, ... in words, then digits.
+    const words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+    const count = (n) => words[n] || String(n);
+    const lead = `<p class="lead-in">Below ${MAIN.length === 1 ? "is the main result" : `are the ${count(MAIN.length)} main results`}
+      of the formalization, with a map of ${MAIN.length === 1 ? "its proof" : "their proofs"}.
+      ${MAIN.length === 1 ? "Its proof relies" : "These proofs rely"} on many intermediate definitions and lemmas.
+      The <a href="#results">full development</a> presents all ${shown.length} definitions and results,
+      in the order in which they are proved.</p>`;
     const main = MAIN.length ? `<section class="main-results"><h2>Main results</h2>
+      ${lead}
       ${MAIN.map((m, i) => card(m.name, m.label, "m" + i) + (m.name in resultId
         ? `<p class="in-context"><a href="#results" data-goto="${resultId[m.name]}">In the full development →</a></p>` : "")).join("")}
       </section>` : "";
@@ -781,11 +809,11 @@
       const rev = l.rev ? `<span class="muted">${esc(l.inputRev || "")}${l.inputRev ? " · " : ""}${esc(l.rev.slice(0, 10))}</span>` : "";
       const used = l.modules > 0;
       const count = !used ? "not imported"
-        : checked ? mods(l.modules) + " imported by the proofs"
-          : hasChallenge ? mods(l.challengeModules) + " imported by the statements"
-            : mods(l.modules) + " imported";
+        : !hasChallenge ? mods(l.modules) + " imported"
+          : l.challengeModules > 0 ? mods(l.challengeModules) + " imported by the statements"
+            : mods(l.modules) + " imported by the proofs";
       const mark = checked
-        ? (CMP.state === "verified" || CMP.state === "declared" ? `<a class="tag ok mark" href="#comparator" title="Checked by comparator">✓ checked</a>` : "")
+        ? (CMP.state === "verified" ? `<a class="tag ok mark" href="#comparator" title="Checked by comparator">✓ checked</a>` : "")
         : isMathlib ? "" : `<span class="tag trust mark">outside Mathlib</span>`;
       return `<article class="item ${used ? "" : "dim"}">
         <div class="item-head"><h3>${esc(LIB_NAMES[l.name.toLowerCase()] || l.name)}</h3>
@@ -806,7 +834,8 @@
       derivatives. Lean checks the proofs of these libraries like those of the project. What you
       trust is that their definitions mean what their names say: that the integral of Mathlib is the
       Lebesgue integral, for instance. Mathlib is developed and reviewed by a large community of
-      mathematicians.${trustedLibs.some((l) => l.name.toLowerCase() !== "mathlib") ? " The other libraries are not: read their definitions with the same care as those of the project." : ""}</p>
+      mathematicians.${trustedLibs.some((l) => l.name.toLowerCase() !== "mathlib") ? " The other libraries are not: read their definitions with the same care as those of the project." : ""}${!replayed && proofLibs.length
+        ? ` Comparator rejected the formalization, so you also trust ${listOf(names(proofLibs))}, which only the proofs use.` : ""}</p>
       <p class="muted small sans">${counts}</p></div>
       <div class="trust-list">${lean}${trustedLibs.map((l) => item(l, false)).join("")}</div>
       ${checkedLibs.length ? `<div class="group-title"><h2>Checked by comparator</h2></div><p class="group-sub">Only the proofs use these libraries. <a href="#comparator">Comparator</a> checks that the statements are those of the challenge, which does not import them, and it replays every proof. You do not need to trust them.</p><div class="trust-list">${checkedLibs.map((l) => item(l, true)).join("")}</div>` : ""}
@@ -965,7 +994,7 @@
     const tag = isThm
       ? (extra.length
         ? `<a class="tag danger" href="#axioms" title="This proof uses an axiom that is not standard">uses ${esc(extra.map((x) => (decls[x] ? decls[x].display : x)).join(", "))}</a>`
-        : d.checked && (CMP.state === "verified" || CMP.state === "declared") ? `<a class="tag ok" href="#comparator" title="Checked by comparator">✓ checked</a>` : `<span class="tag ok">proved</span>`)
+        : d.checked && CMP.state === "verified" ? `<a class="tag ok" href="#comparator" title="Checked by comparator">✓ checked</a>` : `<span class="tag ok">proved</span>`)
       : name in trustId
         ? `<a class="tag trust" href="#definitions" data-goto="${esc(trustId[name])}" title="See the definitions">definition to trust</a>`
         : `<span class="tag trust">definition</span>`;
@@ -1459,7 +1488,7 @@
             <p>The steps of the report that did not succeed, with their output:</p>
             ${(CMP.failedSteps || []).map((st) => `<p><code class="lean">${esc(st.key)}</code>: ${esc(st.judgement)}</p>${st.message ? `<pre class="code"><code>${esc(st.message)}</code></pre>` : ""}`).join("")}
             ${(CMP.failed || []).map((k) => `<p><code class="lean">${esc(k)}</code>: ${esc(CMP.kernelJudgements[k])}</p>`).join("")}</div>${sandboxNote}`
-        : `<p class="callout">No comparator report is embedded in this page: the author states that the formalization passes comparator with these checkers. Anyone can re-run it on the source code (see below).</p>`;
+        : `<p class="callout">No comparator report is embedded in this page, so comparator has not checked this formalization. Anyone can run it on the source code (see below).</p>`;
     return `<main class="page"><div class="col">
       <div class="trust-head"><div class="eyebrow">Verification</div><h1>What “checked” means</h1>
       <p>Lean checks every proof when the project is built. <a href="https://github.com/leanprover/comparator" target="_blank" rel="noopener">Comparator</a>
@@ -1472,7 +1501,7 @@
         <li><div><strong>The challenge.</strong> A copy of the file of the results where every proof is
         replaced by <code class="lean">sorry</code>. Its definitions and statements are the ones a reader checks.</div></li>
         <li><div><strong>The solution.</strong> The actual file, with its proofs, built in a sandbox
-        so that it cannot tamper with the check${CMP.sandboxed ? "" : " (not in the run reported here, see above)"}.</div></li>
+        so that it cannot tamper with the check${CMP.state === "none" || CMP.sandboxed ? "" : " (not in the run reported here, see above)"}.</div></li>
         <li><div><strong>Same statements.</strong> Comparator checks that the ${nThm ? nThm + " " : ""}theorems of the solution
         state exactly the theorems of the challenge.</div></li>
         <li><div><strong>Allowed axioms.</strong> It checks that the proofs use no axiom outside ${(cfg.permitted_axioms || []).length ? (cfg.permitted_axioms.map((a) => `<code class="lean">${esc(a)}</code>`).join(", ")) : "the permitted list"}.</div></li>

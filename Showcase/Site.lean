@@ -618,8 +618,7 @@ def generate (opts : Options) : IO Unit := do
   let comparatorJson := Json.mkObj [
     ("config", comparatorCfg.getD Json.null),
     ("report", report.getD Json.null),
-    ("reportTime", match reportTime with | some t => toJson t | none => Json.null),
-    ("checkers", toJson (fm.list "checkers"))]
+    ("reportTime", match reportTime with | some t => toJson t | none => Json.null)]
   let assets ← match ← IO.getEnv "SHOWCASE_ASSETS" with
     | some a => pure (System.FilePath.mk a)
     | none => do

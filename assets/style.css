@@ -98,9 +98,6 @@ button { font: inherit; color: inherit; }
 .badge .k { background: var(--ok); color: var(--paper); padding: .35rem .55rem; font-weight: 600;
   display: flex; align-items: center; gap: .35rem; white-space: nowrap; }
 .badge .v { padding: .35rem .6rem; background: var(--ok-soft); min-width: 0; }
-.badge.declared { border-color: var(--muted); }
-.badge.declared .k { background: var(--muted); }
-.badge.declared .v { background: var(--panel); }
 .badge.rejected { border-color: var(--danger); }
 .badge.rejected .k { background: var(--danger); }
 .badge.rejected .v { background: var(--panel); }
