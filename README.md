@@ -1,28 +1,34 @@
 # Showcase
 
 A website for the readers of a Lean formalization, in particular those who do not know Lean.
-It is not an API documentation (docgen does that). It reads like a paper, and it first shows what
-the results rest on, in four screens.
+It is not an API documentation (docgen does that). It reads like a paper, in three pages: what is
+proved, what it rests on, and how it is proved.
 
-1. **Libraries.** Lean, Mathlib, and the other libraries of `lake-manifest.json` (Tau Ceti, ...),
-   marked as outside Mathlib, with the number of their modules that the formalization imports. The
-   dependencies of Mathlib (Batteries, Aesop, ...) are counted with Mathlib and not listed. With a
-   `comparator.json`, the libraries to trust are those that its `challenge_module` imports,
-   directly or transitively. Comparator checks the statements against the challenge and replays
-   the proofs, so a library that only the proofs import is listed apart, as checked by comparator.
-   The module counts follow the same split.
-2. **Axioms.** The axioms used by the displayed results, computed by Lean, with an explanation, the
-   Lean statement and links.
-3. **Definitions.** The definitions of the project that the displayed statements depend on,
-   through their types and the bodies of definitions, and all the definitions of the files listed
-   as `trusted`. No checker can tell whether they mean what they should, so they are shown in full.
-4. **Results.** The text of the paper, with a card for each result: the informal statement (the
-   docstring), its proof as a map of its arguments or as a short sentence (or else the comments of
-   the Lean proof), the Lean statement as Lean elaborates it (every name links to its definition),
-   and the Lean source.
+1. **Overview.** The title, the abstract and the main results of the front matter (`main:`), each
+   with its statement and its proof map. Then what the results rest on, one line each: the verdict
+   of comparator, the axioms, the libraries and the definitions to read.
+2. **Foundations.** What a proof checker cannot check, in three sections.
+   * **Libraries.** Lean, Mathlib, and the other libraries of `lake-manifest.json` (Tau Ceti, ...),
+     marked as outside Mathlib, with the number of their modules that the formalization imports.
+     The dependencies of Mathlib (Batteries, Aesop, ...) are counted with Mathlib and not listed.
+     With a `comparator.json`, the libraries to trust are those that its `challenge_module`
+     imports, directly or transitively. Comparator checks the statements against the challenge and
+     replays the proofs, so a library that only the proofs import is listed apart, as checked by
+     comparator. The module counts follow the same split.
+   * **Axioms.** One line, e.g. "only the standard axioms of Lean, and no `sorry`", and the axioms
+     used by the displayed results, computed by Lean, with an explanation, the Lean statement and
+     links, folded for the curious.
+   * **Definitions.** The definitions of the project that the displayed statements depend on,
+     through their types and the bodies of definitions, and all the definitions of the files
+     listed as `trusted`. No checker can tell whether they mean what they should, so they are shown
+     in full.
+3. **Development.** The text of the paper, with a card for each result: the informal statement
+   (the docstring), its proof as a map of its arguments or as a short sentence (or else the
+   comments of the Lean proof), the Lean statement as Lean elaborates it (every name links to its
+   definition), and the Lean source. It opens with the statements of the main results, each with a
+   link to its card, where they are marked.
 
-The reader accepts the first three screens before the results. A badge links to an explanation of
-`lake comparator` and of the checkers it runs.
+A badge links to an explanation of `lake comparator` and of the checkers it runs.
 
 The output is a static folder. It holds `index.html`, with the data and the code of the page, and the
 images and the favicon next to it. The reader needs no server and no build step.
@@ -94,6 +100,8 @@ title: The mean value theorem
 module: MyProject.MeanValue
 trusted: [MyProject.Defs]
 docgen: https://example.org/MyProject/docs/
+main:
+  - exists_deriv_eq_slope | Theorem 1
 ---
 
 A differentiable function has a tangent parallel to each of its chords.
@@ -203,6 +211,7 @@ Only `module` is required.
 | `trusted`                        | `[]`                                                | Modules whose definitions are all listed on the definitions screen.                                                                  |
 | `title`, `abstract`              | first heading and paragraph of the module docstring |                                                                                                                                      |
 | `subtitle`, `paper`, `paper_url` |                                                     | Shown on the first screen.                                                                                                           |
+| `main`                           |                                                     | A list of `Name \| Label`: the main results, shown first on the overview with their proof maps, and the definitions needed to read them. Each must have a card in the text. |
 | `authors`                        | the `Authors:` line of the module header            | A list.                                                                                                                              |
 | `docgen`                         |                                                     | The docgen of the project, for the links to its declarations.                                                                        |
 | `docgen_external`                | Mathlib's docgen                                    | The docgen of the dependencies.                                                                                                      |

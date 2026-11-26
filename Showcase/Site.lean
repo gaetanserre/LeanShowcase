@@ -502,10 +502,22 @@ def generate (opts : Options) : IO Unit := do
     let namedJson := namedKinds.toList.map fun (kind, key) =>
       (key, Json.mkObj (byName (doc.ofKind kind)).toList)
     let titlesJson := byName doc.titles
+    -- The main results, `Name | Label` in the front matter, shown first on the overview.
+    let mut mainJson : Array Json := #[]
+    for item in fm.list "main" do
+      let parts := item.splitOn "|"
+      let s := strip (parts.headD item)
+      let label := if parts.length > 1 then some (strip ("|".intercalate (parts.drop 1))) else none
+      let some n := resolveIdent env namespaces s
+        | IO.eprintln s!"showcase: warning: unknown main result `{s}`, skipped"
+      unless shown.contains n do
+        IO.eprintln s!"showcase: warning: the main result `{s}` has no card in the results"
+      mainJson := mainJson.push (Json.mkObj [("name", nameJson n), ("label", optJson label)])
     -- Module docs of the main module: the title and the abstract.
     let headerDoc := ((getModuleDoc? env mainModule).bind (·[0]?)).map (·.doc)
     let (docTitle, docLead) := (headerDoc.map titleAndLead).getD (none, none)
     return Json.mkObj <| namedJson ++ [
+      ("main", Json.arr mainJson),
       ("blocks", Json.arr blockJson),
       ("shown", Json.arr (shown.map nameJson)),
       ("aux", Json.arr (auxNames.map nameJson)),

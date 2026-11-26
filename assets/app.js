@@ -138,19 +138,6 @@
       markdown(md)}<p class="qed" role="img" aria-label="End of proof"></p></details>`;
   }
 
-  function store(key, val) {
-    try {
-      if (val === undefined) return JSON.parse(localStorage.getItem("showcase:" + key) || "null");
-      localStorage.setItem("showcase:" + key, JSON.stringify(val));
-    } catch (e) { return null; }
-  }
-  const accepted = Object.assign({ libraries: false, axioms: false, definitions: false },
-    store("accepted:" + (M.module || "")) || {});
-  function accept(step) {
-    accepted[step] = true;
-    store("accepted:" + (M.module || ""), accepted);
-  }
-
   /* Where a constant is shown on the page. */
   const resultId = {};   // name -> card id in the results
   const trustId = {};    // name -> item id in the definitions page
@@ -603,10 +590,17 @@
 
   /* ------------------------------------------------------------------ chrome */
 
-  const STEPS = [
-    ["libraries", "Libraries"], ["axioms", "Axioms"], ["definitions", "Definitions"],
-    ["results", "Results"],
-  ];
+  // The three pages, in the order of a paper: what is proved, what it rests on, and how it is
+  // proved.
+  const TABS = [["intro", "Overview"], ["foundations", "Foundations"], ["results", "Development"]];
+  // Former pages, now sections of the foundations: their links still work. Each alias gives its
+  // page and the section to show.
+  const ALIASES = {
+    libraries: ["foundations", "libraries"], axioms: ["foundations", "axioms"],
+    definitions: ["foundations", "definitions"], development: ["results", null],
+  };
+  const routeOf = (r) => (ALIASES[r] ? ALIASES[r][0] : r);
+  const PAGE_TITLES = { foundations: "Foundations", results: "Development", comparator: "Comparator" };
 
   /* The message of a step of a comparator report: its text, or the end of its process output. */
   function stepMessage(step) {
@@ -667,13 +661,10 @@
   }
 
   function bar(route) {
-    const stepIdx = STEPS.findIndex((s) => s[0] === route);
     return `<header class="bar"><div class="bar-in">
       <a class="brand" href="#intro">${esc(M.title || M.module)}</a>
-      <nav aria-label="Steps"><ol class="steps">${STEPS.map((s, i) => {
-        const done = s[0] !== "results" && accepted[s[0]];
-        return `<li><a href="#${s[0]}" class="${done ? "done" : ""}" ${s[0] === route ? 'aria-current="page"' : ""}><span class="n">${done ? "✓" : i + 1}</span><span class="t">${s[1]}</span></a></li>`;
-      }).join("")}</ol></nav>
+      <nav aria-label="Pages"><ol class="steps">${TABS.map((s, i) =>
+        `<li><a href="#${s[0]}" ${s[0] === route ? 'aria-current="page"' : ""}><span class="n">${i + 1}</span><span class="t">${s[1]}</span></a></li>`).join("")}</ol></nav>
     </div></header>`;
   }
 
@@ -707,11 +698,50 @@
   const trustedLibs = hasChallenge ? usedLibs.filter((l) => l.challengeModules > 0) : usedLibs;
   const checkedLibs = hasChallenge ? usedLibs.filter((l) => !(l.challengeModules > 0)) : [];
 
-  function pageIntro() {
-    const nAx = (D.axioms || []).length;
+  /* The main results of the front matter (`main:`), shown first, as on the first page of a paper. */
+  const MAIN = (D.main || []).filter((m) => decls[m.name]);
+  const mainSet = new Set(MAIN.map((m) => m.name));
+
+  /* A list of names: "a", "a and b", "a, b and c". */
+  const listOf = (xs) => xs.length <= 1 ? xs.join("") : xs.slice(0, -1).join(", ") + " and " + xs[xs.length - 1];
+
+  /* What the results rest on, in one line each: the checker, the axioms, the libraries and the
+     definitions, with links to their sections of the foundations. */
+  function axiomsLine() {
+    // in the usual order of the standard axioms, then the others
+    const order = Object.keys(AXIOMS);
+    const rank = (x) => (order.includes(x) ? order.indexOf(x) : order.length);
+    const axs = (D.axioms || []).map((a) => a.name).sort((x, y) => rank(x) - rank(y) || x.localeCompare(y));
+    const extra = axs.filter(isExtraAxiom);
+    const code = (x) => `<code class="lean">${esc(x)}</code>`;
+    return extra.length
+      ? `The proofs use ${extra.length > 1 ? "axioms" : "an axiom"} outside the standard ones of Lean: ${listOf(extra.map(code))}.`
+      : `Only the standard axioms of Lean${axs.length ? ` (${listOf(axs.map(code))})` : ""}, and no ${code("sorry")}.`;
+  }
+  function restsOn() {
+    const names = (ls) => ls.map((l) => esc(LIB_NAMES[l.name.toLowerCase()] || l.name));
+    const libsLine = `The statements use ${listOf(["Lean"].concat(names(trustedLibs)))}.${checkedLibs.length
+      ? ` ${listOf(names(checkedLibs))} ${checkedLibs.length > 1 ? "are" : "is"} used only in the proofs, which comparator replays: you do not need to trust ${checkedLibs.length > 1 ? "them" : "it"}.` : ""}`;
     const nDef = trustCount + notationCount;
+    const defsLine = nDef
+      ? `${nDef} definition${nDef > 1 ? "s" : ""} of the project. No checker can tell whether they mean what they should: read them.`
+      : "No definition of the project to review.";
+    const row = (id, label, text) => `<li><a class="k" href="#${id}" data-goto="${id}">${label}</a><span>${text}</span></li>`;
+    return `<ul class="rests">
+      ${CMP.state !== "none" ? `<li><span class="k">Statements</span><span>${badge()}</span></li>` : ""}
+      ${row("axioms", "Axioms", axiomsLine())}
+      ${row("libraries", "Libraries", libsLine)}
+      ${row("definitions", "Definitions", defsLine)}
+    </ul>`;
+  }
+
+  function pageIntro() {
     const authors = (M.authors || []).join(", ");
     const paper = M.paper ? (M.paperUrl ? `<a href="${esc(M.paperUrl)}" target="_blank" rel="noopener">${esc(M.paper)}</a>` : esc(M.paper)) : "";
+    const main = MAIN.length ? `<section class="main-results"><h2>Main results</h2>
+      ${MAIN.map((m, i) => card(m.name, m.label, "m" + i) + (m.name in resultId
+        ? `<p class="in-context"><a href="#results" data-goto="${resultId[m.name]}">In the full development →</a></p>` : "")).join("")}
+      </section>` : "";
     return `<main class="page"><div class="col">
       <h1 class="title">${esc(M.title || M.module)}</h1>
       ${M.subtitle ? `<p class="subtitle">${inline(M.subtitle)}</p>` : ""}
@@ -722,29 +752,21 @@
         <span>${shown.length} results presented</span>
       </div>
       ${M.abstract ? `<section class="abstract"><span class="eyebrow">About</span><div class="prose">${markdown(M.abstract)}</div></section>` : ""}
-      <h2>Before the results</h2>
-      <p>A computer has checked every proof of this page. A proof checker can only confirm that the
-      conclusions follow from their starting points, listed below. Review them, then read the
-      results.</p>
-      <div class="ledger">
-        <a href="#libraries"><span class="step">Step 1</span><span class="num">${trustedLibs.length + 1}</span><span class="what">Libraries</span><span class="why">Lean and the libraries whose definitions the statements use.</span></a>
-        <a href="#axioms"><span class="step">Step 2</span><span class="num">${nAx}</span><span class="what">Axioms</span><span class="why">The principles assumed without proof.</span></a>
-        <a href="#definitions"><span class="step">Step 3</span><span class="num">${nDef}</span><span class="what">Definitions</span><span class="why">What the project defines. No checker can tell whether they mean what they should.</span></a>
-      </div>
+      ${main}
+      <section class="rests-on"><h2>What the results rest on</h2>
+        <p>A computer has checked every proof. A proof checker can only confirm that the conclusions
+        follow from their starting points.</p>
+        ${restsOn()}
+      </section>
       <div class="cta">
-        <a class="btn primary" href="#libraries">The libraries →</a>
+        <a class="btn primary" href="#foundations">The foundations →</a>
+        <a class="btn" href="#results">The full development →</a>
       </div>
       ${footer()}
     </div></main>`;
   }
 
-  function acceptBar(step, next, nextLabel, text) {
-    return `<div class="accept"><span class="note">${text}</span><span class="acts">
-      <button class="btn primary" data-accept="${step}" data-next="${next}">${accepted[step] ? "Accepted · continue" : "I accept"} → ${nextLabel}</button>
-    </span></div>`;
-  }
-
-  function pageLibraries() {
+  function sectionLibraries() {
     const mods = (n) => `${n || 0} module${n === 1 ? "" : "s"}`;
     const lean = `<article class="item">
       <div class="item-head"><h3>Lean ${esc(M.lean || "")}</h3><span class="tag">${hasChallenge ? mods(M.challengeCoreModules) + " imported by the statements" : mods(M.coreModules) + " imported"}</span></div>
@@ -778,8 +800,8 @@
     const counts = hasChallenge
       ? `The statements import ${mods(M.challengeProjectModules)} of the project and ${mods(libModules("challengeModules", "challengeCoreModules"))} of libraries. With the proofs, ${mods(M.projectModules)} of the project and ${mods(libModules("modules", "coreModules"))} of libraries are imported.`
       : `${mods(M.projectModules)} of the project, ${mods(libModules("modules", "coreModules"))} of libraries are imported.`;
-    return `<main class="page"><div class="col">
-      <div class="trust-head"><div class="eyebrow">Step 1 of 3</div><h1>The libraries</h1>
+    return `<section class="found" id="libraries">
+      <div class="trust-head"><h2>Libraries</h2>
       <p>The statements use notions defined in other libraries: real numbers, measures, integrals,
       derivatives. Lean checks the proofs of these libraries like those of the project. What you
       trust is that their definitions mean what their names say: that the integral of Mathlib is the
@@ -789,11 +811,10 @@
       <div class="trust-list">${lean}${trustedLibs.map((l) => item(l, false)).join("")}</div>
       ${checkedLibs.length ? `<div class="group-title"><h2>Checked by comparator</h2></div><p class="group-sub">Only the proofs use these libraries. <a href="#comparator">Comparator</a> checks that the statements are those of the challenge, which does not import them, and it replays every proof. You do not need to trust them.</p><div class="trust-list">${checkedLibs.map((l) => item(l, true)).join("")}</div>` : ""}
       ${unused.length ? `<div class="group-title"><h2>Required but not imported</h2></div><p class="group-sub">The build fetches these packages, but no file of the formalization imports them.</p><div class="trust-list">${unused.map((l) => item(l, false)).join("")}</div>` : ""}
-      ${acceptBar("libraries", "axioms", "Axioms", "Accepting means trusting that these libraries define what they claim.")}
-    </div></main>`;
+    </section>`;
   }
 
-  function pageAxioms() {
+  function sectionAxioms() {
     const order = Object.keys(AXIOMS);
     const rank = (a) => { const i = order.indexOf(a.name); return i < 0 ? -1 : (AXIOMS[a.name].danger ? -1 : i); };
     // the axioms that are not standard first, then the standard ones in their usual order
@@ -812,14 +833,16 @@
       </article>`;
     };
     const danger = axs.filter((a) => isExtraAxiom(a.name));
-    return `<main class="page"><div class="col">
-      <div class="trust-head"><div class="eyebrow">Step 2 of 3</div><h1>The axioms</h1>
-      <p>Lean's logic is extended by a few axioms, statements assumed without proof. Lean records
-      which ones every result depends on. The results of this page depend on ${axs.length === 0 ? "no axiom" : "these " + axs.length + " axioms"}, and on nothing else.</p>
-      ${danger.length ? `<p class="callout">${danger.length} of them ${danger.length > 1 ? "are" : "is"} not one of the standard axioms of mathematics: the results that use ${danger.length > 1 ? "them" : "it"} are proved only under ${danger.length > 1 ? "these assumptions" : "this assumption"}.</p>` : `<p>They are the three standard axioms of Lean. Together they give classical mathematics, with the excluded middle and the axiom of choice, as in a usual mathematics paper.</p>`}</div>
-      <div class="trust-list">${axs.map(item).join("")}</div>
-      ${acceptBar("axioms", "definitions", "Definitions", danger.length ? "Accepting means assuming these axioms, including the ones that are not standard." : "Accepting means working in classical mathematics with these axioms.")}
-    </div></main>`;
+    // One line, and the details for the curious, open when an axiom is not standard.
+    return `<section class="found" id="axioms">
+      <div class="trust-head"><h2>Axioms</h2><p>${axiomsLine()}</p>
+      ${danger.length ? `<p class="callout">The results that use ${danger.length > 1 ? "these axioms" : "this axiom"} are proved only under ${danger.length > 1 ? "these assumptions" : "this assumption"}.</p>` : ""}</div>
+      <details class="ax-details"${danger.length ? " open" : ""}><summary>The axioms, for the curious</summary>
+        <p>Lean's logic is extended by a few axioms, statements assumed without proof. Lean records
+        which ones every result depends on. The results of this page depend on ${axs.length === 0 ? "no axiom" : "these " + axs.length + " axioms"}, and on nothing else.${danger.length ? "" : " They are the three standard axioms of Lean. Together they give classical mathematics, with the excluded middle and the axiom of choice, as in a usual mathematics paper."}</p>
+        <div class="trust-list">${axs.map(item).join("")}</div>
+      </details>
+    </section>`;
   }
 
   /* Whether an axiom is outside the standard ones of Lean. */
@@ -863,7 +886,7 @@
     </article>`;
   }
 
-  function pageDefinitions() {
+  function sectionDefinitions() {
     const groups = (D.trusted || []).map((g, gi) => {
       const title = g.path || g.module;
       const sub = g.listed ? "A file the author lists as the definitions of the project."
@@ -878,14 +901,28 @@
         <p class="group-sub">${sub}</p>
         <div class="trust-list">${notations}${g.items.map((it, ii) => trustedItem(it.name, it.usedBy, "t" + gi + "-" + ii)).join("")}</div>`;
     }).join("");
-    return `<main class="page"><div class="col">
-      <div class="trust-head"><div class="eyebrow">Step 3 of 3</div><h1>The definitions</h1>
+    return `<section class="found" id="definitions">
+      <div class="trust-head"><h2>Definitions</h2>
       <p>A proof checker confirms that every proof is correct. It cannot confirm that a definition
       captures the intended notion: a wrong definition makes a correct proof of the wrong statement.
-      These are the definitions the formalization relies on. Read them.</p>
+      The statements of the results, the main ones included, rely on the definitions below. Read
+      them.</p>
       <p class="muted small sans">The definitions of <code class="lean">${esc(M.modulePath || M.module)}</code>, the file of the results, are part of the formalization: they are shown with the results.</p></div>
       ${groups}
-      ${acceptBar("definitions", "results", "Results", "Accepting means agreeing that these definitions say what the paper means.")}
+    </section>`;
+  }
+
+  function pageFoundations() {
+    return `<main class="page"><div class="col">
+      <div class="trust-head"><div class="eyebrow">Foundations</div><h1>What the results rest on</h1>
+      <p>A computer has checked every proof. A proof checker can only confirm that the conclusions
+      follow from their starting points: the libraries that the statements use, the axioms of the
+      logic and the definitions of the project. They are listed below.</p></div>
+      ${sectionLibraries()}
+      ${sectionAxioms()}
+      ${sectionDefinitions()}
+      <div class="cta"><a class="btn primary" href="#results">The full development →</a></div>
+      ${footer()}
     </div></main>`;
   }
 
@@ -909,7 +946,14 @@
     return r.trim() ? `<span class="ref">${inline(r.trim())}</span>` : "";
   }
 
-  function card(name, label, id) {
+  /* The informal statement of a declaration: its block `informal`, or else its docstring. */
+  function statementHtml(name) {
+    const d = decls[name];
+    const { title: docTitle, rest } = splitDoc(d.doc);
+    return informal[name] ? markdown(informal[name]) : markdown(docTitle ? rest : (d.doc || ""));
+  }
+
+  function card(name, label, id, main) {
     const d = decls[name];
     if (!d) return "";
     const { title: docTitle, rest, ref } = splitDoc(d.doc);
@@ -930,9 +974,11 @@
     if (isThm && !written && ((d.steps && d.steps.length) || aux.length)) toggles.push(["proof", "Informal proof"]);
     toggles.push(["sig", "Lean statement"]);
     toggles.push(["code", isThm ? "Lean proof" : "Lean definition"]);
-    return `<article class="card" id="${id}" data-name="${esc(name)}">
+    // a main result, or a definition listed with them to read them (e.g. the equation they solve)
+    return `<article class="card${main ? " main" : ""}" id="${id}" data-name="${esc(name)}">
+      ${main ? `<div class="main-mark">${isThm ? "Main result" : "Key definition"}</div>` : ""}
       <div class="card-head"><span class="label">${inline(kindLabel)}</span>${title ? `<span class="name">${inline(title)}</span>` : ""}${refHtml(ref, label)}${tag}</div>
-      <div class="card-body"><div class="stmt prose">${informal[name] ? markdown(informal[name]) : markdown(docTitle ? rest : (d.doc || ""))}</div>
+      <div class="card-body"><div class="stmt prose">${statementHtml(name)}</div>
         ${figures[name] ? figureHtml(figures[name]) : ""}
         ${isThm && sketches[name] ? sketchHtml(sketches[name]) : ""}
         ${isThm && diagrams[name] ? mapHtml(name, kindLabel) : ""}
@@ -998,6 +1044,27 @@
     return html;
   }
 
+  /* At the top of the development, the main results it proves: their statements, each with a link
+     to its card, where its proof is. */
+  function mainRecall() {
+    if (!MAIN.length) return "";
+    const n = MAIN.length;
+    return `<section class="main-recall" id="main-recall">
+      <h2>Main results</h2>
+      <p>This development proves the following ${n > 1 ? "results" : "result"}. The sections below
+      build ${n > 1 ? "them" : "it"} step by step.</p>
+      ${MAIN.map((m) => {
+        const d = decls[m.name];
+        const title = titles[m.name] || splitDoc(d.doc).title;
+        return `<div class="recall">
+          <div class="recall-head"><b>${inline(m.label || KIND[d.kind] || d.kind)}</b>${title ? ` <span class="name">${inline(title)}</span>` : ""}
+            ${m.name in resultId ? `<a class="recall-go" href="#results" data-goto="${resultId[m.name]}">${d.kind === "theorem" ? "Proof" : "Details"} ↓</a>` : ""}</div>
+          <div class="stmt prose">${statementHtml(m.name)}</div>
+        </div>`;
+      }).join("")}
+    </section>`;
+  }
+
   function pageResults() {
     headingCounter = 0;
     const headings = [];
@@ -1012,7 +1079,7 @@
       } else if (b.decl) {
         const d = decls[b.decl];
         if (!d) return;
-        body += card(b.decl, b.label, "r" + i);
+        body += card(b.decl, b.label, "r" + i, mainSet.has(b.decl));
         const t = titles[b.decl] || splitDoc(d.doc).title;
         toc.push({ type: "res", label: b.label || KIND[d.kind], text: t || lastPart(d.display), id: "r" + i });
       }
@@ -1022,10 +1089,9 @@
       const venue = cleanTex(e.booktitle || e.journal || "");
       return `<li id="ref-${esc(k)}"><span class="key">[${esc(k)}]</span><span>${esc(bibAuthors(e.author || ""))}. <em>${esc(cleanTex(e.title || ""))}</em>.${venue ? " " + esc(venue) + "." : ""} ${esc(e.year || "")}.${e.url ? ` <a href="${esc(e.url)}" target="_blank" rel="noopener">Link</a>` : ""}${e.doi ? ` <a href="https://doi.org/${esc(e.doi)}" target="_blank" rel="noopener">DOI</a>` : ""}</span></li>`;
     }).join("")}</ol></section>` : "";
-    const pending = STEPS.slice(0, 3).filter((s) => !accepted[s[0]]);
     // one menu per section, with the subsections and the results it contains. It opens only while
     // the section is read (see spyToc), never by hand: a click on a title goes to the section.
-    const groups = [];
+    const groups = MAIN.length ? [{ sec: { type: "sec", text: "Main results", id: "main-recall" }, items: [] }] : [];
     toc.forEach((t) => {
       if (t.type === "sec") groups.push({ sec: t, items: [] });
       else {
@@ -1043,14 +1109,14 @@
       : `<li class="sec" data-sec="${g.sec.id}"><a href="#results" data-goto="${g.sec.id}">${plain(g.sec.text)}</a>${
         g.items.length ? `<ol>${g.items.map(tocItem).join("")}</ol>` : ""}</li>`).join("")}</ol></nav>`;
     const html = `<main class="page"><div class="results">${tocHtml}<div class="paper">
-      <div class="eyebrow">Results</div>
+      <div class="eyebrow">Development</div>
       <h1 class="ptitle">${esc(M.title || M.module)}</h1>
       <div class="intro-meta">${badge()}${(M.authors || []).length ? `<span>${esc(M.authors.join(", "))}</span>` : ""}</div>
       <div class="trustline">
         <span>These results rest on</span>
-        <a href="#libraries">${trustedLibs.length + 1} libraries</a>·<a href="#axioms">${(D.axioms || []).length} axioms</a>·<a href="#definitions">${trustCount + notationCount} definitions</a>
-        ${pending.length ? `<span>· not yet reviewed: ${pending.map((s) => `<a href="#${s[0]}">${s[1].toLowerCase()}</a>`).join(", ")}</span>` : `<span>· reviewed ✓</span>`}
+        <a href="#libraries" data-goto="libraries">${trustedLibs.length + 1} libraries</a>·<a href="#axioms" data-goto="axioms">${(D.axioms || []).length} axioms</a>·<a href="#definitions" data-goto="definitions">${trustCount + notationCount} definitions</a>
       </div>
+      ${mainRecall()}
       ${body}
       __REFS__
       ${footer()}
@@ -1496,14 +1562,16 @@
 
   /* ------------------------------------------------------------------ router */
 
-  const ROUTES = {
-    intro: pageIntro, libraries: pageLibraries, axioms: pageAxioms, definitions: pageDefinitions,
-    results: pageResults, comparator: pageComparator,
-  };
+  const ROUTES = { intro: pageIntro, foundations: pageFoundations, results: pageResults, comparator: pageComparator };
   let current = null;
 
   function render(route, goto) {
+    if (ALIASES[route]) {
+      goto = goto || ALIASES[route][1];
+      route = ALIASES[route][0];
+    }
     if (!ROUTES[route]) route = "intro";
+    if (route === current && !goto) window.scrollTo(0, 0);
     if (route !== current) {
       figureCounter = 0;
       app.innerHTML = bar(route) + ROUTES[route]();
@@ -1511,7 +1579,7 @@
       layoutMaps(app);
       typeset(app);
       current = route;
-      document.title = (M.title || M.module) + (route === "intro" ? "" : " · " + route[0].toUpperCase() + route.slice(1));
+      document.title = (M.title || M.module) + (PAGE_TITLES[route] ? " · " + PAGE_TITLES[route] : "");
       if (!goto) window.scrollTo(0, 0);
     }
     if (goto) {
@@ -1540,7 +1608,7 @@
       e.preventDefault();
       const route = (a.getAttribute("href") || "#results").slice(1);
       const goto = a.getAttribute("data-goto");
-      if (route === current) render(route, goto);
+      if (routeOf(route) === current) render(route, goto);
       else { pendingGoto = goto; location.hash = route; }
       return;
     }
@@ -1550,12 +1618,6 @@
     if (pn) { selectNode(pn); return; }
     const close = e.target.closest(".pmap-close");
     if (close) { selectNode(null, close.closest(".pmap")); return; }
-    const acc = e.target.closest("[data-accept]");
-    if (acc) {
-      accept(acc.getAttribute("data-accept"));
-      location.hash = acc.getAttribute("data-next");
-      return;
-    }
     const tog = e.target.closest(".tog");
     if (tog) {
       const cardEl = tog.closest(".card");

@@ -87,7 +87,6 @@ button { font: inherit; color: inherit; }
   width: 1.35rem; height: 1.35rem; border-radius: 50%; display: inline-grid; place-items: center;
   font-size: .75rem; border: 1px solid currentColor; font-variant-numeric: tabular-nums;
 }
-.steps .done .n { background: var(--ok); border-color: var(--ok); color: var(--paper); }
 
 /* ---------- comparator badge ---------- */
 .badge {
@@ -131,17 +130,19 @@ button { font: inherit; color: inherit; }
 .abstract { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
   padding-block: 1.25rem; margin: 1.5rem 0 2.5rem; }
 .abstract .eyebrow { display: block; margin-bottom: .4rem; }
-.ledger { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 1rem;
-  margin: 1.5rem 0 2rem; }
-.ledger a { display: grid; gap: .3rem; align-content: start; padding: 1rem 1.1rem;
-  border: 1px solid var(--rule); border-radius: 10px; color: var(--ink); text-decoration: none;
-  background: var(--paper); }
-.ledger a:hover { border-color: var(--accent); }
-.ledger .num { font-family: var(--sans); font-size: 1.75rem; font-weight: 600;
-  font-variant-numeric: tabular-nums; line-height: 1.1; }
-.ledger .what { font-family: var(--sans); font-weight: 600; font-size: .9375rem; }
-.ledger .why { font-size: .9375rem; color: var(--muted); line-height: 1.45; }
-.ledger .step { font-family: var(--sans); font-size: .75rem; color: var(--muted); }
+/* overview: the main results, then what they rest on */
+.main-results, .rests-on { margin: 0 0 2.5rem; }
+.main-results > h2, .rests-on > h2 { font-size: 1.35rem; margin: 0 0 .25rem; }
+.main-results .card { margin: 1.25rem 0 0; }
+.page .in-context { margin: .4rem .25rem 0; text-align: right; font-family: var(--sans);
+  font-size: .8125rem; }
+.rests { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: .5rem; }
+.rests li { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: .25rem 1rem;
+  align-items: baseline; padding: .65rem .9rem; border: 1px solid var(--rule); border-radius: 8px;
+  font-size: .9375rem; line-height: 1.5; }
+.rests .k { font-family: var(--sans); font-size: .875rem; font-weight: 600; color: var(--ink); }
+.rests a.k { color: var(--accent); }
+@media (max-width: 40rem) { .rests li { grid-template-columns: minmax(0, 1fr); } }
 .cta { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; margin-top: 1.5rem; }
 .btn {
   display: inline-flex; align-items: center; gap: .5rem; border-radius: 8px; cursor: pointer;
@@ -152,6 +153,14 @@ button { font: inherit; color: inherit; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--paper); }
 .btn.primary:hover { filter: brightness(1.08); background: var(--accent); }
 
+/* foundations: the libraries, the axioms and the definitions, one section each */
+.found { margin-top: 2.75rem; padding-top: 1.75rem; border-top: 1px solid var(--rule);
+  scroll-margin-top: 4.5rem; }
+.found .trust-head h2 { font-size: 1.5rem; margin: 0 0 .75rem; }
+.ax-details { margin-top: 1rem; }
+.ax-details > summary { cursor: pointer; font-family: var(--sans); font-size: .875rem;
+  color: var(--accent); }
+.ax-details > p { margin: .9rem 0 0; }
 /* trust pages */
 .trust-head h1 { font-size: clamp(1.6rem, 3.5vw, 2.2rem); margin: .4rem 0 .75rem; }
 .trust-head p + p { margin-top: .75rem; }
@@ -197,12 +206,6 @@ button { font: inherit; color: inherit; }
 .chip:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
 .chip.danger { border-color: var(--danger); color: var(--danger); }
 a.tag.danger:hover { text-decoration: none; filter: brightness(1.1); }
-.accept {
-  margin-top: 2.5rem; padding-top: 1.25rem; border-top: 1px solid var(--rule);
-  display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; justify-content: space-between;
-}
-.accept .note { font-family: var(--sans); font-size: .875rem; color: var(--muted); flex: 1 1 18rem; }
-.accept .acts { display: flex; gap: .5rem; flex-wrap: wrap; }
 
 /* ---------- results ---------- */
 .results { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem 3rem; }
@@ -247,6 +250,20 @@ a.tag.danger:hover { text-decoration: none; filter: brightness(1.1); }
   margin: 1.75rem 0; border: 1px solid var(--rule); border-radius: 12px; background: var(--paper);
   scroll-margin-top: 5rem; min-width: 0;
 }
+/* the main results, recalled at the top of the development */
+.main-recall { margin: 0 0 2.5rem; scroll-margin-top: 5rem; }
+.main-recall > h2 { margin: 0 0 .25rem; }
+.recall { margin: .9rem 0 0; padding: .75rem 1rem .5rem; border-left: 3px solid var(--accent);
+  background: var(--panel); border-radius: 0 8px 8px 0; }
+.recall-head { display: flex; flex-wrap: wrap; gap: .25rem .6rem; align-items: baseline; }
+.recall-head .name { font-style: italic; }
+.recall-go { margin-left: auto; font-family: var(--sans); font-size: .8125rem; }
+.recall .stmt { margin-top: .2rem; }
+/* a main result, in the development */
+.card.main { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.main-mark { padding: .8rem 1.25rem 0; font-family: var(--sans); font-size: .6875rem;
+  font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.main-mark + .card-head { padding-top: .25rem; }
 .card-head { padding: 1rem 1.25rem .15rem; display: flex; flex-wrap: wrap; gap: .25rem .6rem;
   align-items: baseline; }
 .card-head .label { font-weight: 600; font-size: 1.0625rem; }
