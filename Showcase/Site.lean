@@ -405,10 +405,22 @@ def generate (opts : Options) : IO Unit := do
     -- the results, so they are not listed among the definitions to trust.
     let mut trusted : NameSet := usedBy.fold (init := {}) fun s n _ =>
       if moduleOf? env n == some mainModule then s else s.insert n
+    -- The statements of the challenge of comparator count too, even without a card.
+    let mut challengeDeps : NameSet := {}
+    for n in checkedNames.toList do
+      if env.contains n then
+        for t in ← trustedDeps inp n do challengeDeps := challengeDeps.insert t
+    -- A definition of `trusted` that no statement uses is only used in proofs: the reader does not
+    -- need to check it.
     for m in trustedModules do
       for (n, _) in ← moduleDecls inp m (includePrivate := true) do
         if let some ci := env.find? n then
-          if !(ci matches .thmInfo _) then trusted := trusted.insert n
+          if ci matches .thmInfo _ then continue
+          if usedBy.contains n || challengeDeps.contains n then
+            trusted := trusted.insert n
+          else
+            IO.eprintln s!"showcase: warning: `{n}`, in the trusted module {m}, is used by no \
+              statement and is not listed"
     for n in trusted.toArray do
       if !decls.contains n then decls := decls.insert n (← declData inp n)
     -- The extracts are only right if the sources are those that were compiled.
