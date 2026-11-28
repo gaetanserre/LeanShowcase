@@ -3,289 +3,43 @@ Copyright (c) 2026 Gaëtan Serré. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Gaëtan Serré
 -/
-import Lean
-import Showcase.Text
+import Showcase.Source
+import Showcase.Project
 
 /-!
-# Extraction of the data of the website
+# Extraction from the environment
 
-Everything the website shows is read from the compiled environment of the formalization and from
-its source files:
-
-* the declarations to display, with their docstring (the informal statement), their pretty-printed
-  signature with a link for every constant, their source split into statement and proof, and the
-  comments of the proof (the informal proof);
-* the definitions of the project that the displayed statements depend on, which a reader has to
-  trust since no checker can verify that they mean what they should;
-* the axioms used by the displayed results;
-* the libraries of `lake-manifest.json`, with the number of their modules that are imported.
+Everything the website shows about a declaration is read from the compiled environment and from
+the source files: its docstring, its statement as Lean elaborates it (with a link for every
+constant), its source, the comments of its proof and the axioms it depends on. This file also
+computes what a reader has to trust: the definitions that the statements depend on, outside the
+reviewed libraries, and the notations around them.
 -/
 
-open Lean Meta Elab
+open Lean Meta
 
 namespace Showcase
 
-/-! ## Files and packages -/
-
-/-- Where a module comes from: `""` for the project, `"lean"` for the Lean core library, and the
-package name for the dependencies of `lake-manifest.json`. -/
-def originOf (sysroot : System.FilePath) (olean : System.FilePath) : String :=
-  let p := olean.toString
-  let comps := p.splitOn "/.lake/packages/"
-  if comps.length ≥ 2 then
-    ((comps.getLast!.splitOn "/").headD "")
-  else if hasPrefix p sysroot.toString then "lean"
-  else ""
-
-/-- The `.lean` source of a module: from `LEAN_SRC_PATH`, or next to the build directory of its
-`.olean`. -/
-def findSource (mod : Name) : IO (Option System.FilePath) := do
-  let sp ← getSrcSearchPath
-  if let some p ← sp.findWithExt "lean" mod then return some p
-  let olean ← findOLean mod
-  let s := olean.toString
-  match s.splitOn "/.lake/build/lib/lean/" with
-  | [root, rest] =>
-    let p : System.FilePath := root ++ "/" ++ takeN rest (rest.length - ".olean".length) ++ ".lean"
-    return if ← p.pathExists then some p else none
-  | _ => return none
-
-/-- The closest ancestor directory of `p` containing a Lake configuration file. -/
-partial def findPackageRoot (p : System.FilePath) : IO (Option System.FilePath) := do
-  let some dir := p.parent | return none
-  if (← (dir / "lakefile.toml").pathExists) || (← (dir / "lakefile.lean").pathExists) then
-    return some dir
-  if dir.toString == "/" || dir.toString == "" then return none
-  findPackageRoot dir
-
-/-- The output of a command, or `none` if it fails. -/
-def runCmd? (cmd : String) (args : Array String) : IO (Option String) := do
-  try
-    let out ← IO.Process.output { cmd, args }
-    return if out.exitCode == 0 then some (strip out.stdout) else none
-  catch _ => return none
-
-/-- The browsable URL of a git remote. -/
-def httpsRemote (url : String) : String :=
-  let url := if hasSuffix url ".git" then takeN url (url.length - 4) else url
-  if hasPrefix url "git@" then
-    match (dropN url 4).splitOn ":" with
-    | [host, path] => s!"https://{host}/{path}"
-    | _ => url
-  else url
-
-/-! ## Declarations -/
-
-/-- The data of a declaration shown on the website. -/
-structure DeclData where
-  name : Name
-  display : String
-  kind : String
-  module : Name
-  doc : Option String
-  signature : Array (String × Option Name)
-  source : String
-  statement : String
-  body : String
-  steps : Array ProofStep
-  axioms : Array Name
-  uses : Array Name
-  aux : Array Name
-  line : Nat
-  endLine : Nat
-  isPrivate : Bool
-  /-- Whether the source file has the declared name where the compiled file says it is. If not,
-  the source changed since it was compiled, and the extracts would be shifted. -/
-  inSync : Bool := true
-  deriving Inhabited
-
-/-- The fixed inputs of the extraction. -/
-structure Input where
-  /-- The package of every imported module (see `originOf`). -/
-  origins : Std.HashMap Name String
-  /-- The lines of the source files of the project modules. -/
-  sources : Std.HashMap Name (Array String)
-  /-- The namespaces to consider open when printing and resolving names. -/
-  opens : Array Name
-  /-- The main module, whose declarations are displayed. -/
-  mainModule : Name
+/-! ## Constants -/
 
 /-- The module of a constant. -/
 def moduleOf? (env : Environment) (n : Name) : Option Name :=
   (env.getModuleIdxFor? n).map fun i => env.header.moduleNames[i.toNat]!
 
-/-- Whether a constant belongs to the project. -/
-def Input.isProject (inp : Input) (env : Environment) (n : Name) : Bool :=
-  match moduleOf? env n with
-  | some m => inp.origins.getD m "lean" == ""
-  | none => false
+/-- The namespaces of the declarations that implement syntax: parsers, macros, elaborators,
+delaborators. -/
+def syntaxNamespaces : List Name :=
+  [`Lean.ParserDescr, `Lean.TrailingParserDescr, `Lean.Macro, `Lean.Parser, `Lean.PrettyPrinter,
+    `Lean.Elab, `Lean.Meta.Simp, `Lean.Server]
 
-/-- The kind of a declaration, as a reader would call it. -/
-def kindOf (ci : ConstantInfo) : MetaM String := do
-  let env ← getEnv
-  match ci with
-  | .thmInfo _ => return "theorem"
-  | .defnInfo d =>
-    if ← isInstance ci.name then return "instance"
-    if d.hints matches .abbrev then return "abbrev"
-    return "def"
-  | .opaqueInfo _ => return "opaque"
-  | .axiomInfo _ => return "axiom"
-  | .inductInfo _ =>
-    if isClass env ci.name then return "class"
-    if isStructure env ci.name then return "structure"
-    return "inductive"
-  | .ctorInfo _ => return "constructor"
-  | .recInfo _ => return "recursor"
-  | .quotInfo _ => return "quotient"
-
-/-- The constant whose pretty-printed form an `Info` annotates, if it is the head of an
-application or a constant. -/
-def infoConst? : Elab.Info → Option Name
-  | .ofTermInfo ti => ti.expr.consumeMData.getAppFn.constName?
-  | .ofDelabTermInfo ti => ti.expr.consumeMData.getAppFn.constName?
-  | _ => none
-
-/-- Flattens a tagged pretty-printed text into pieces of text, each with the constant of the
-innermost annotation around it. -/
-partial def flattenTagged (infos : PrettyPrinter.InfoPerPos) :
-    Widget.TaggedText (Nat × Nat) → Option Name → Array (String × Option Name) →
-      Array (String × Option Name)
-  | .text s, cur, acc => acc.push (s, cur)
-  | .append ts, cur, acc => ts.foldl (fun acc t => flattenTagged infos t cur acc) acc
-  | .tag (n, _) t, _, acc => flattenTagged infos t ((infos.get? n).bind infoConst?) acc
-
-/-- Merges consecutive pieces with the same constant. -/
-def mergePieces (ps : Array (String × Option Name)) : Array (String × Option Name) :=
-  ps.foldl (init := #[]) fun acc (s, c) =>
-    match acc.back? with
-    | some (s', c') => if c' == c then acc.pop.push (s' ++ s, c) else acc.push (s, c)
-    | none => acc.push (s, c)
-
-/-- The pretty-printed signature of a declaration, as pieces of text linked to constants. -/
-def signatureOf (n : Name) (width : Nat := 90) : MetaM (Array (String × Option Name)) := do
-  try
-    let fwi ← PrettyPrinter.ppSignature n
-    let tt := Widget.TaggedText.prettyTagged fwi.fmt (w := width)
-    return mergePieces (flattenTagged fwi.infos tt none #[])
-  catch _ => return #[(toString n, none)]
-
-/-- The constants used by the type and the value of a declaration. -/
-def usedConstants (ci : ConstantInfo) : Array Name :=
-  let val := match ci with
-    | .thmInfo v => v.value.getUsedConstants
-    | .defnInfo v => v.value.getUsedConstants
-    | .opaqueInfo v => v.value.getUsedConstants
-    | _ => #[]
-  let all := ci.type.getUsedConstants ++ val
-  (all.foldl (fun (s : NameSet) n => s.insert n) {}).toArray.qsort Name.quickLt
-
-/-- The name of a declaration as written in the source. -/
-def userName (n : Name) : Name := privateToUserName n
-
-/-- Whether a constant is generated by Lean rather than written by the user. -/
+/-- Whether a constant is generated by Lean rather than written by an author: auxiliary
+declarations, constructors, recursors, and the declarations behind syntax. -/
 def isGenerated (env : Environment) (n : Name) : Bool :=
   (userName n).isInternalDetail || isAuxRecursor env n || isNoConfusion env n ||
     match env.find? n with
     | some (.ctorInfo _) | some (.recInfo _) => true
-    | some ci => ci.type.getAppFn.constName?.any (·.getRoot == `Lean)
+    | some ci => ci.type.getAppFn.constName?.any fun h => syntaxNamespaces.any (·.isPrefixOf h)
     | none => true
-
-/-- The declarations written in a module, in source order. A declaration is kept if its declared
-name is written at its selection range and it is not inside another kept declaration (which drops
-the fields of structures, `@[simps]` lemmas, ...). -/
-def moduleDecls (inp : Input) (mod : Name) (includePrivate : Bool) :
-    MetaM (Array (Name × DeclarationRanges)) := do
-  let env ← getEnv
-  let some idx := env.getModuleIdx? mod | return #[]
-  let lines := inp.sources.getD mod #[]
-  let mut found : Array (Name × DeclarationRanges) := #[]
-  for n in env.header.moduleData[idx.toNat]!.constNames do
-    if isGenerated env n || (isPrivateName n && !includePrivate) then continue
-    let some r ← findDeclarationRanges? n | continue
-    let sel := strip (sliceRange lines r.selectionRange)
-    if sel == "" || !hasSuffix ((userName n).toString (escape := false)) sel then continue
-    found := found.push (n, r)
-  let sorted := found.qsort fun (_, a) (_, b) =>
-    a.range.pos.line < b.range.pos.line ||
-      (a.range.pos.line == b.range.pos.line && a.range.pos.column < b.range.pos.column)
-  let mut kept : Array (Name × DeclarationRanges) := #[]
-  for (n, r) in sorted do
-    match kept.back? with
-    | some (_, r') =>
-      if r'.range.endPos.line > r.range.pos.line ||
-          (r'.range.endPos.line == r.range.pos.line &&
-            r'.range.endPos.column ≥ r.range.pos.column) then continue
-    | none => pure ()
-    kept := kept.push (n, r)
-  return kept
-
-/-- The lemmas of the main module that a proof relies on: the private theorems it uses, directly
-or not, and the public theorems it uses directly. -/
-partial def auxLemmas (inp : Input) (n : Name) : MetaM (Array Name) := do
-  let env ← getEnv
-  let mut seen : NameSet := {}
-  let mut todo := #[n]
-  let mut out := #[]
-  if let some ci := env.find? n then
-    for u in usedConstants ci do
-      if u != n && !isPrivateName u && moduleOf? env u == some inp.mainModule &&
-          !isGenerated env u then
-        if let some (.thmInfo _) := env.find? u then out := out.push u
-  while h : todo.size > 0 do
-    let c := todo.back
-    todo := todo.pop
-    let some ci := env.find? c | continue
-    for u in usedConstants ci do
-      if seen.contains u then continue
-      seen := seen.insert u
-      if isPrivateName u && moduleOf? env u == some inp.mainModule && !isGenerated env u then
-        if let some (.thmInfo _) := env.find? u then
-          out := out.push u
-          todo := todo.push u
-      else if (userName u).isInternalDetail && moduleOf? env u == some inp.mainModule then
-        todo := todo.push u
-  return out
-
-/-- The data of a declaration. -/
-def declData (inp : Input) (n : Name) : MetaM DeclData := do
-  let env ← getEnv
-  let some ci := env.find? n | throwError "unknown declaration `{n}`"
-  let module := (moduleOf? env n).getD .anonymous
-  let ranges ← findDeclarationRanges? n
-  let lines := inp.sources.getD module #[]
-  let source := match ranges with
-    | some r => if lines.isEmpty then "" else dropDocComment (sliceRange lines r.range)
-    | none => ""
-  let kind ← kindOf ci
-  -- the name must be written at its selection range (an instance may have no written name)
-  let inSync := match ranges with
-    | some r =>
-      lines.isEmpty || kind == "instance" ||
-        let sel := strip (sliceRange lines r.selectionRange)
-        sel != "" && hasSuffix ((userName n).toString (escape := false)) sel
-    | none => true
-  let (statement, body) :=
-    if kind == "structure" || kind == "class" || kind == "inductive" then (source, "")
-    else splitStatement source
-  let steps := if kind == "theorem" then proofSteps body else #[]
-  let doc ← findDocString? env n
-  let axioms ← try collectAxioms n catch _ => pure #[]
-  let aux ← if kind == "theorem" then auxLemmas inp n else pure #[]
-  let ns := (userName n).getPrefix
-  let sig ← withTheReader Core.Context
-      (fun ctx => { ctx with currNamespace := ns,
-                             openDecls := inp.opens.toList.map (.simple · []) }) do
-    signatureOf n
-  return {
-    name := n, display := (userName n).toString (escape := false), kind, module, doc,
-    signature := sig, source, statement, body, steps,
-    axioms := axioms.qsort Name.quickLt, uses := usedConstants ci, aux,
-    line := ranges.map (·.range.pos.line) |>.getD 0,
-    endLine := ranges.map (·.range.endPos.line) |>.getD 0,
-    isPrivate := isPrivateName n, inSync }
-
-/-! ## Trusted definitions -/
 
 /-- The declaration a reader sees for a generated constant: the structure of a projection or a
 constructor, the inductive type of a recursor, and the constant itself otherwise. -/
@@ -296,66 +50,334 @@ def ownerOf (env : Environment) (n : Name) : Name :=
     | some (.recInfo _) => n.getPrefix
     | _ => if isAuxRecursor env n || isNoConfusion env n then n.getPrefix else n
 
-/-- The definitions of the project that the statement of `root` depends on, through the types and
-the bodies of definitions. Theorems are not followed: their proofs are checked. -/
-partial def trustedDeps (inp : Input) (root : Name) : MetaM (Array Name) := do
+/-- The kind of a declaration, as its keyword. -/
+def kindOf (ci : ConstantInfo) : MetaM String := do
   let env ← getEnv
-  let some rci := env.find? root | return #[]
-  -- The statement of a theorem, or the whole of a definition.
-  let start := if rci matches .thmInfo _ then rci.type.getUsedConstants else #[root]
+  match ci with
+  | .thmInfo _ => return if ← isInstance ci.name then "instance" else "theorem"
+  | .defnInfo d =>
+    if ← isInstance ci.name then return "instance"
+    return if d.hints matches .abbrev then "abbrev" else "def"
+  | .opaqueInfo _ => return if ← isInstance ci.name then "instance" else "opaque"
+  | .axiomInfo _ => return "axiom"
+  | .inductInfo _ =>
+    return if isClass env ci.name then "class"
+      else if isStructure env ci.name then "structure" else "inductive"
+  | .ctorInfo _ => return "constructor"
+  | .recInfo _ => return "recursor"
+  | .quotInfo _ => return "quotient"
+
+/-- The constants of the value of a declaration. -/
+def valueConsts : ConstantInfo → Array Name
+  | .thmInfo v => v.value.getUsedConstants
+  | .defnInfo v => v.value.getUsedConstants
+  | .opaqueInfo v => v.value.getUsedConstants
+  | _ => #[]
+
+/-- The constants of the type, the value and the constructors of a declaration. -/
+def usedConsts (env : Environment) (ci : ConstantInfo) : Array Name :=
+  let ctors := match ci with
+    | .inductInfo v => v.ctors.toArray.flatMap fun c =>
+        ((env.find? c).map (·.type.getUsedConstants)).getD #[]
+    | _ => #[]
+  let all := ci.type.getUsedConstants ++ valueConsts ci ++ ctors
+  (all.foldl (·.insert ·) ({} : NameSet)).toArray
+
+/-! ## Context -/
+
+/-- The fixed inputs of the extraction, with caches of the source files. -/
+structure Ctx where
+  packages : PackageIndex
+  /-- The index of the package of the project. -/
+  project : Nat
+  /-- The packages whose definitions are reviewed: Lean, Mathlib and its dependencies. -/
+  reviewed : Array Nat
+  lines : IO.Ref (Std.HashMap Name (Array String))
+  scopes : IO.Ref (Std.HashMap Name (Array Scope))
+
+namespace Ctx
+
+/-- The package of a constant. -/
+def packageOf? (ctx : Ctx) (env : Environment) (n : Name) : Option Nat :=
+  (moduleOf? env n).bind ctx.packages.packageOf?
+
+/-- Whether a constant belongs to the project. -/
+def isProject (ctx : Ctx) (env : Environment) (n : Name) : Bool :=
+  ctx.packageOf? env n == some ctx.project
+
+/-- Whether a constant belongs to a reviewed library. -/
+def isReviewed (ctx : Ctx) (env : Environment) (n : Name) : Bool :=
+  (ctx.packageOf? env n).all ctx.reviewed.contains
+
+/-- Whether a module belongs to a reviewed library. -/
+def moduleReviewed (ctx : Ctx) (mod : Name) : Bool :=
+  (ctx.packages.packageOf? mod).all ctx.reviewed.contains
+
+/-- The lines of the source of a module, empty if it is not found. -/
+def sourceLines (ctx : Ctx) (mod : Name) : IO (Array String) := do
+  if let some ls := (← ctx.lines.get).get? mod then return ls
+  let ls ← match ← findSource? mod with
+    | some p => pure (linesOf (← IO.FS.readFile p))
+    | none => pure #[]
+  ctx.lines.modify (·.insert mod ls)
+  return ls
+
+/-- The scopes of the lines of a module (see `Showcase.fileScopes`). -/
+def scopesOf (ctx : Ctx) (mod : Name) : IO (Array Scope) := do
+  if let some ss := (← ctx.scopes.get).get? mod then return ss
+  let ss := Showcase.fileScopes (← ctx.sourceLines mod)
+  ctx.scopes.modify (·.insert mod ss)
+  return ss
+
+/-- The scope of the command at line `line` of a module. -/
+def scopeAt (ctx : Ctx) (mod : Name) (line : Nat) : IO Scope := do
+  let ss ← ctx.scopesOf mod
+  return ss[line]?.getD (ss.back?.getD {})
+
+end Ctx
+
+/-- The `open` declarations of a scope, with their namespaces resolved as Lean does. -/
+def resolveOpens (env : Environment) (sc : Scope) : List OpenDecl := Id.run do
+  let mut out : Array OpenDecl := #[]
+  for d in sc.opens do
+    match d with
+    | .simple ns except =>
+      let cands := ResolveName.resolveNamespace env sc.ns out.toList ns
+      out := out ++ (if cands.isEmpty then #[ns] else cands.toArray).map (.simple · except)
+    | d => out := out.push d
+  return out.toList
+
+/-- The constant that an identifier names at a given scope, among `candidates` if it is not
+empty. -/
+def resolveIdent? (env : Environment) (ns : Name) (opens : List OpenDecl) (s : String)
+    (accept : Name → Bool := fun _ => true) : Option Name :=
+  let n := s.toName
+  if n.isAnonymous then none else
+  let cands := (ResolveName.resolveGlobalName env {} ns opens n).filterMap fun (c, fields) =>
+    if fields.isEmpty && !isGenerated env c then some c else none
+  cands.find? accept
+
+/-! ## Declarations -/
+
+/-- The data of a declaration shown on the website. -/
+structure DeclData where
+  name : Name
+  kind : String
+  module : Name
+  doc : Option String
+  /-- The statement as Lean elaborates it, as pieces of text with the constant they print. -/
+  signature : Array (String × Option Name)
+  /-- The source, without the docstring. -/
+  source : String
+  line : Nat
+  endLine : Nat
+  /-- The comments of the proof, with their depth. -/
+  comments : Array (Nat × String)
+  /-- The constants that the identifiers of the source name. -/
+  links : Array (String × Name)
+  /-- All the constants that the declaration uses. -/
+  uses : Array Name
+  deriving Inhabited
+
+/-- The text written at the selection range of a declaration, without `«»`. -/
+def selectionText (lines : Array String) (r : DeclarationRanges) : String :=
+  let sel := ((trim (sliceRange lines r.selectionRange)).replace "«" "").replace "»" ""
+  (dropPrefix? sel "_root_.").getD sel
+
+/-- Whether the name of a declaration is written at its selection range. If not, the source changed
+since it was compiled, or the name was generated. -/
+def writtenAt (lines : Array String) (r : DeclarationRanges) (n : Name) : Bool :=
+  let sel := selectionText lines r
+  sel != "" && (nameStr (userName n)).endsWith sel
+
+/-- The constant that an `Info` of the pretty-printer annotates: the head of an application or a
+constant. -/
+def infoConst? : Elab.Info → Option Name
+  | .ofTermInfo ti => ti.expr.consumeMData.getAppFn.constName?
+  | .ofDelabTermInfo ti => ti.expr.consumeMData.getAppFn.constName?
+  | _ => none
+
+/-- Flattens a tagged pretty-printed text into pieces with the constant of the innermost
+annotation around them, merging consecutive pieces with the same constant. -/
+partial def flattenTagged (infos : PrettyPrinter.InfoPerPos) :
+    Widget.TaggedText (Nat × Nat) → Option Name → Array (String × Option Name) →
+      Array (String × Option Name)
+  | .text s, c, acc =>
+    match acc.back? with
+    | some (s', c') => if c' == c then acc.pop.push (s' ++ s, c) else acc.push (s, c)
+    | none => acc.push (s, c)
+  | .append ts, c, acc => ts.foldl (fun acc t => flattenTagged infos t c acc) acc
+  | .tag (n, _) t, _, acc => flattenTagged infos t ((infos.get? n).bind infoConst?) acc
+
+/-- The statement of a declaration as Lean elaborates it, printed with the namespace and the `open`
+commands of its source. -/
+def signatureOf (n : Name) (opens : List OpenDecl) (width : Nat := 80) :
+    MetaM (Array (String × Option Name)) := do
+  try
+    withTheReader Core.Context
+        (fun c => { c with currNamespace := (userName n).getPrefix, openDecls := opens }) do
+      let fwi ← PrettyPrinter.ppSignature n
+      return flattenTagged fwi.infos (Widget.TaggedText.prettyTagged fwi.fmt (w := width)) none #[]
+  catch _ => return #[(nameStr (userName n), none)]
+
+/-- The data of a declaration. Throws an error if its source changed since it was compiled. -/
+def declData (ctx : Ctx) (n : Name) : MetaM DeclData := do
+  let env ← getEnv
+  let some ci := env.find? n | throwError "unknown declaration `{n}`"
+  let kind ← kindOf ci
+  let module := (moduleOf? env n).getD .anonymous
+  let lines ← ctx.sourceLines module
+  let ranges ← findDeclarationRanges? n
+  let line := (ranges.map (·.range.pos.line)).getD 0
+  -- The name must be written where the compiled file places the declaration. Otherwise the source
+  -- changed since it was compiled, or the declaration was generated: its source is not shown.
+  let synced := match ranges with
+    | some r => lines.isEmpty || kind == "instance" || writtenAt lines r n
+    | none => true
+  if !synced then
+    warn s!"`{n}` is not where {module}:{line} places it: its source is not shown (if the source \
+      changed, run `lake build` in the project)"
+  let source := match ranges with
+    | some r => if lines.isEmpty || !synced then "" else dropDocComment (sliceRange lines r.range)
+    | none => ""
+  let comments := if kind == "theorem" then proofComments (splitStatement source).2 else #[]
+  let scope ← ctx.scopeAt module line
+  let opens := resolveOpens env scope
+  let uses := usedConsts env ci
+  let usesSet := uses.foldl (·.insert ·) ({} : NameSet)
+  -- the identifiers of the source, linked to the constants of the declaration that they name: only
+  -- those that end like one of these constants are resolved
+  let lastOf (n : Name) : String := match n with
+    | .str _ s => s
+    | _ => ""
+  let lasts := uses.foldl (·.insert <| lastOf ·) ({} : Std.HashSet String)
+  let mut links : Array (String × Name) := #[]
+  for id in (identifiers source).toList.eraseDups do
+    if !lasts.contains (lastOf id.toName) then continue
+    if let some c := resolveIdent? env (userName n).getPrefix opens id (usesSet.contains ·) then
+      links := links.push (id, c)
+  return {
+    name := n, kind, module, doc := ← findDocString? env n,
+    signature := ← signatureOf n opens, source, line,
+    endLine := (ranges.map (·.range.endPos.line)).getD 0, comments, links, uses }
+
+/-- The declarations written in a module, in source order. A declaration is kept if its name is
+written at its selection range, and if it is not inside another kept declaration: this drops the
+fields of structures, the lemmas generated by attributes, the derived instances, ... -/
+def moduleDecls (ctx : Ctx) (mod : Name) (includePrivate : Bool) :
+    MetaM (Array (Name × DeclarationRanges)) := do
+  let env ← getEnv
+  let some idx := env.getModuleIdx? mod | return #[]
+  let lines ← ctx.sourceLines mod
+  let mut found : Array (Name × DeclarationRanges) := #[]
+  for n in env.header.moduleData[idx.toNat]!.constNames do
+    if isGenerated env n || (isPrivateName n && !includePrivate) then continue
+    let some r ← findDeclarationRanges? n | continue
+    if !(writtenAt lines r n || (← isInstance n)) then continue
+    found := found.push (n, r)
+  let before (a b : DeclarationRanges) : Bool :=
+    a.range.pos.line < b.range.pos.line ||
+      (a.range.pos.line == b.range.pos.line && a.range.pos.column < b.range.pos.column)
+  let sorted := found.qsort fun (_, a) (_, b) => before a b
+  let mut kept : Array (Name × DeclarationRanges) := #[]
+  for (n, r) in sorted do
+    if let some (_, r') := kept.back? then
+      let (s, e) := (r.range.pos, r'.range.endPos)
+      if s.line < e.line || (s.line == e.line && s.column < e.column) then continue
+    kept := kept.push (n, r)
+  return kept
+
+/-! ## What the reader trusts -/
+
+/-- The definitions that the statements of the theorems `roots` depend on, through the types and
+the values of definitions, outside the reviewed libraries. A theorem is not followed: its proof is
+checked. -/
+def trustedDefs (ctx : Ctx) (roots : Array Name) : MetaM (Array Name) := do
+  let env ← getEnv
+  let mut todo : Array Name := #[]
+  for r in roots do
+    if let some ci := env.find? r then
+      todo := todo ++ (if ci matches .thmInfo _ then ci.type.getUsedConstants else #[r])
   let mut seen : NameSet := {}
-  let mut todo := start
-  let mut out : NameSet := {}
-  while h : todo.size > 0 do
-    let c := todo.back
+  let mut out : Array Name := #[]
+  while todo.size > 0 do
+    let c := todo.back!
     todo := todo.pop
-    if seen.contains c then continue
+    if seen.contains c || ctx.isReviewed env c then continue
     seen := seen.insert c
-    if !inp.isProject env c then continue
     let some ci := env.find? c | continue
     if ci matches .thmInfo _ then continue
     let owner := ownerOf env c
     if owner != c then
       todo := todo.push owner
       continue
-    if !isGenerated env c then
-      if (← findDeclarationRanges? c).isSome then out := out.insert c
-    todo := todo ++ usedConstants ci
-    if let .inductInfo v := ci then
-      for ctor in v.ctors do
-        if let some cci := env.find? ctor then todo := todo ++ cci.type.getUsedConstants
-  return out.toArray.qsort Name.quickLt
-
-/-! ## Names in prose -/
-
-/-- The identifiers in the code spans (between backticks) of a Markdown text. -/
-def codeSpanIdents (md : String) : Array String := Id.run do
-  let spans := (md.splitOn "`").toArray
-  let mut out := #[]
-  for h : i in [0:spans.size] do
-    if i % 2 == 0 then continue
-    let cs := spans[i].toList.toArray
-    let mut j := 0
-    while j < cs.size do
-      if isIdFirst cs[j]! then
-        let mut k := j + 1
-        while k < cs.size && (isIdRest cs[k]! || (cs[k]! == '.' && k + 1 < cs.size &&
-            isIdFirst cs[k + 1]!)) do
-          k := k + 1
-        out := out.push (slice cs j k)
-        j := k
-      else
-        j := j + 1
+    if !isGenerated env c && (← findDeclarationRanges? c).isSome then out := out.push c
+    todo := todo ++ usedConsts env ci
   return out
 
-/-- Resolves an identifier of the prose against the environment, trying the open namespaces. -/
-def resolveIdent (env : Environment) (namespaces : Array Name) (s : String) : Option Name :=
-  if s.length ≤ 1 then none else
-  let n := s.toName
-  if n.isAnonymous then none
-  else if env.contains n && !isGenerated env n then some n
-  else namespaces.findSome? fun ns =>
-    let m := ns ++ n
-    if env.contains m && !isGenerated env m then some m else none
+/-- The axioms that constants depend on, memoized: each constant gets the set of its axioms as a
+bit mask over `axioms`. -/
+structure AxiomState where
+  axioms : Array Name := #[]
+  masks : Std.HashMap Name Nat := {}
+
+/-- The axioms that a constant depends on, as a bit mask. -/
+partial def axiomMask (env : Environment) (c : Name) : StateM AxiomState Nat := do
+  if let some m := (← get).masks.get? c then return m
+  -- no cycle among constants, but a placeholder makes it certain to terminate
+  modify fun s => { s with masks := s.masks.insert c 0 }
+  let m ← match env.find? c with
+    | some (.axiomInfo _) => do
+      let s ← get
+      set { s with axioms := s.axioms.push c }
+      pure (1 <<< s.axioms.size)
+    | some ci =>
+      let deps := match ci with
+        | .inductInfo v => ci.type.getUsedConstants ++ v.ctors.toArray
+        | .quotInfo _ => #[]
+        | _ => ci.type.getUsedConstants ++ valueConsts ci
+      deps.foldlM (fun m d => return m ||| (← axiomMask env d)) 0
+    | none => pure 0
+  modify fun s => { s with masks := s.masks.insert c m }
+  return m
+
+/-- The axioms of a bit mask. -/
+def AxiomState.axiomsOf (s : AxiomState) (m : Nat) : Array Name := Id.run do
+  let mut out := #[]
+  for h : i in [0:s.axioms.size] do
+    if (m >>> i) % 2 == 1 then out := out.push s.axioms[i]
+  return out
+
+/-- A notation declared in the source of a module. -/
+structure NotationData where
+  /-- The notation as a reader writes it, e.g. `‖x‖`, when it can be read from the source. -/
+  pattern : Option String
+  doc : Option String
+  source : String
+  module : Name
+  line : Nat
+  endLine : Nat
+
+/-- The notations declared in the modules `mods`: the commands behind their parsers. -/
+def notationsOf (ctx : Ctx) (mods : Array Name) : MetaM (Array NotationData) := do
+  let env ← getEnv
+  let mut out : Array NotationData := #[]
+  for mod in mods do
+    let some idx := env.getModuleIdx? mod | continue
+    let lines ← ctx.sourceLines mod
+    let mut seen : Array Nat := #[]
+    for n in env.header.moduleData[idx.toNat]!.constNames do
+      let some ci := env.find? n | continue
+      let isParser := ci.type.constName?.any
+        fun h => h == ``ParserDescr || h == ``TrailingParserDescr
+      if !isParser then continue
+      let some r ← findDeclarationRanges? n | continue
+      if seen.contains r.range.pos.line then continue
+      seen := seen.push r.range.pos.line
+      let source := dropDocComment (sliceRange lines r.range)
+      if !isNotationCommand source then continue
+      out := out.push { pattern := notationPattern source, doc := ← findDocString? env n, source,
+                        module := mod, line := r.range.pos.line, endLine := r.range.endPos.line }
+  return out.qsort fun a b => a.line < b.line
 
 end Showcase
